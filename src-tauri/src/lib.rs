@@ -1,0 +1,682 @@
+use serde::Serialize;
+use std::time::Duration;
+use tauri::Manager;
+
+const UA_BANGUMI: &str = "acg-tracker/0.1.0 (personal anime tracker)";
+const UA_VNDB: &str = "acg-tracker/0.1.0 (personal galgame tracker)";
+const DEFAULT_BANGUMI: &str = "https://api.bgm.tv";
+const DEFAULT_VNDB: &str = "https://api.vndb.org";
+
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct BangumiItem {
+    pub id: i64,
+    pub name: String,
+    pub name_cn: String,
+    pub summary: String,
+    pub date: Option<String>,
+    pub image: Option<String>,
+    pub score: Option<f64>,
+    pub eps: Option<i64>,
+    pub volumes: Option<i64>,
+    pub total_episodes: Option<i64>,
+    pub tags: Vec<String>,
+    pub btype: i64,
+}
+
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct VndbItem {
+    pub id: String,
+    pub title: String,
+    pub released: Option<String>,
+    pub image: Option<String>,
+    pub rating: Option<f64>,
+    pub description: Option<String>,
+    pub tags: Vec<String>,
+}
+
+fn base_url(api_base: &str, default: &str) -> String {
+    let trimmed = api_base.trim().trim_end_matches('/');
+    if trimmed.is_empty() {
+        default.to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// 数据目录：自定义目录优先，空值回退到默认应用配置目录。
+fn resolve_data_dir(app: &tauri::AppHandle, custom: &str) -> std::path::PathBuf {
+    let trimmed = custom.trim();
+    if trimmed.is_empty() {
+        app.path().app_config_dir().unwrap_or_default()
+    } else {
+        std::path::PathBuf::from(trimmed)
+    }
+}
+
+fn bootstrap_data_dir_from(cfg_dir: &std::path::Path) -> String {
+    let file = cfg_dir.join("data_dir.json");
+    if let Ok(text) = std::fs::read_to_string(&file) {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+            if let Some(s) = v.get("dataDir").and_then(|x| x.as_str()) {
+                return s.to_string();
+            }
+        }
+    }
+    String::new()
+}
+
+/// 当前实际使用的数据库文件路径（引导文件指向自定义目录时优先）。
+fn current_db_path(app: &tauri::AppHandle) -> std::path::PathBuf {
+    let cfg = app.path().app_config_dir().unwrap_or_default();
+    let custom = bootstrap_data_dir_from(&cfg);
+    if !custom.is_empty() {
+        let p = std::path::PathBuf::from(&custom).join("acg.db");
+        if p.exists() {
+            return p;
+        }
+    }
+    cfg.join("acg.db")
+}
+
+fn current_covers_dir(app: &tauri::AppHandle) -> std::path::PathBuf {
+    let cfg = app.path().app_config_dir().unwrap_or_default();
+    let custom = bootstrap_data_dir_from(&cfg);
+    let base = if custom.is_empty() {
+        app.path().app_data_dir().unwrap_or(cfg)
+    } else {
+        std::path::PathBuf::from(&custom)
+    };
+    base.join("covers")
+}
+
+/// 根据代理模式创建客户端：
+/// - auto：使用系统代理（Clash 等）
+/// - custom：使用自定义代理地址
+/// - direct：直连
+/// 无论哪种模式，都会附带一个直连客户端作为失败回退。
+fn make_clients(
+    proxy_mode: &str,
+    proxy_url: &str,
+) -> Result<(Option<reqwest::Client>, reqwest::Client), String> {
+    let timeout = Duration::from_secs(20);
+    let direct = reqwest::Client::builder()
+        .no_proxy()
+        .timeout(timeout)
+        .build()
+        .map_err(|e| format!("创建客户端失败: {e}"))?;
+
+    let primary = match proxy_mode {
+        "direct" => None,
+        "custom" => {
+            let url = proxy_url.trim();
+            if url.is_empty() {
+                None
+            } else {
+                let proxy =
+                    reqwest::Proxy::all(url).map_err(|e| format!("代理地址无效: {e}"))?;
+                Some(
+                    reqwest::Client::builder()
+                        .proxy(proxy)
+                        .timeout(timeout)
+                        .build()
+                        .map_err(|e| format!("创建客户端失败: {e}"))?,
+                )
+            }
+        }
+        _ => Some(
+            reqwest::Client::builder()
+                .timeout(timeout)
+                .build()
+                .map_err(|e| format!("创建客户端失败: {e}"))?,
+        ),
+    };
+    Ok((primary, direct))
+}
+
+async fn send_with_fallback(
+    build: impl Fn(&reqwest::Client) -> reqwest::RequestBuilder,
+    proxy_mode: &str,
+    proxy_url: &str,
+) -> Result<reqwest::Response, String> {
+    let (primary, direct) = make_clients(proxy_mode, proxy_url)?;
+    if let Some(client) = &primary {
+        match build(client).send().await {
+            Ok(resp) => return Ok(resp),
+            Err(_) => {}
+        }
+    }
+    build(&direct)
+        .send()
+        .await
+        .map_err(|e| format!("请求失败: {e}"))
+}
+
+async fn check_status(resp: reqwest::Response, service: &str) -> Result<reqwest::Response, String> {
+    let status = resp.status();
+    if status.is_success() {
+        return Ok(resp);
+    }
+    let text = resp.text().await.unwrap_or_default();
+    let snippet: String = text.chars().take(200).collect();
+    Err(format!("{service} 返回状态 {status}：{snippet}"))
+}
+
+/// Bangumi 搜索结果的 image 可能是字符串 URL，也可能是 { large, common, ... } 对象。
+fn extract_bangumi_image(it: &serde_json::Value) -> Option<String> {
+    let img = it.get("image")?;
+    if let Some(s) = img.as_str() {
+        return Some(s.to_string());
+    }
+    img.get("large")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+}
+
+#[tauri::command]
+async fn search_bangumi(
+    keyword: String,
+    types: Vec<i64>,
+    limit: u32,
+    api_base: String,
+    proxy_mode: String,
+    proxy_url: String,
+) -> Result<Vec<BangumiItem>, String> {
+    let base = base_url(&api_base, DEFAULT_BANGUMI);
+    let limit = limit.clamp(1, 50);
+    let url = reqwest::Url::parse_with_params(
+        &format!("{base}/v0/search/subjects"),
+        &[("limit", limit.to_string())],
+    )
+    .map_err(|e| e.to_string())?;
+
+    let mut payload = serde_json::json!({ "keyword": keyword, "sort": "match" });
+    if !types.is_empty() {
+        payload["filter"] = serde_json::json!({ "type": types });
+    }
+
+    let resp = send_with_fallback(
+        |client| {
+            client
+                .post(url.clone())
+                .header("User-Agent", UA_BANGUMI)
+                .json(&payload)
+        },
+        &proxy_mode,
+        &proxy_url,
+    )
+    .await?;
+    let resp = check_status(resp, "Bangumi").await?;
+
+    let body: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Bangumi 响应解析失败: {e}"))?;
+
+    let data = body
+        .get("data")
+        .and_then(|d| d.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    let mut items = Vec::new();
+    for it in data {
+        let mut tags = Vec::new();
+        if let Some(arr) = it.get("meta_tags").and_then(|v| v.as_array()) {
+            for v in arr {
+                if let Some(s) = v.as_str() {
+                    if !s.trim().is_empty() && !tags.contains(&s.to_string()) {
+                        tags.push(s.to_string());
+                    }
+                }
+            }
+        }
+        if let Some(arr) = it.get("tags").and_then(|v| v.as_array()) {
+            for v in arr {
+                if let Some(s) = v.get("name").and_then(|x| x.as_str()) {
+                    let s = s.to_string();
+                    if !tags.contains(&s) {
+                        tags.push(s);
+                    }
+                }
+            }
+        }
+        tags.truncate(10);
+
+        let score = it
+            .get("rating")
+            .and_then(|r| r.get("score"))
+            .and_then(|v| v.as_f64())
+            .or_else(|| it.get("score").and_then(|v| v.as_f64()));
+
+        items.push(BangumiItem {
+            id: it.get("id").and_then(|v| v.as_i64()).unwrap_or(0),
+            name: it.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            name_cn: it.get("name_cn").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            summary: it.get("summary").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            date: it.get("date").and_then(|v| v.as_str()).map(|s| s.to_string()),
+            image: extract_bangumi_image(&it),
+            score,
+            eps: it.get("eps").and_then(|v| v.as_i64()),
+            volumes: it.get("volumes").and_then(|v| v.as_i64()),
+            total_episodes: it.get("total_episodes").and_then(|v| v.as_i64()),
+            tags,
+            btype: it.get("type").and_then(|v| v.as_i64()).unwrap_or(2),
+        });
+    }
+    Ok(items)
+}
+
+#[tauri::command]
+async fn search_vndb(
+    keyword: String,
+    limit: u32,
+    api_base: String,
+    proxy_mode: String,
+    proxy_url: String,
+) -> Result<Vec<VndbItem>, String> {
+    let base = base_url(&api_base, DEFAULT_VNDB);
+    let limit = limit.clamp(1, 100);
+    let payload = serde_json::json!({
+        "filters": ["search", "=", keyword],
+        "fields": "id,title,released,image.url,rating,description,tags{id,name,spoiler,rating}",
+        "sort": "searchrank",
+        "results": limit
+    });
+
+    let resp = send_with_fallback(
+        |client| {
+            client
+                .post(format!("{base}/kana/vn"))
+                .header("User-Agent", UA_VNDB)
+                .json(&payload)
+        },
+        &proxy_mode,
+        &proxy_url,
+    )
+    .await?;
+    let resp = check_status(resp, "VNDB").await?;
+
+    let body: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("VNDB 响应解析失败: {e}"))?;
+
+    let results = body
+        .get("results")
+        .and_then(|d| d.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    let mut items = Vec::new();
+    for it in results {
+        let mut tags: Vec<(f64, String)> = Vec::new();
+        if let Some(arr) = it.get("tags").and_then(|v| v.as_array()) {
+            for v in arr {
+                let spoiler = v.get("spoiler").and_then(|x| x.as_i64()).unwrap_or(1);
+                if spoiler != 0 {
+                    continue;
+                }
+                if let Some(name) = v.get("name").and_then(|x| x.as_str()) {
+                    let rating = v.get("rating").and_then(|x| x.as_f64()).unwrap_or(0.0);
+                    tags.push((rating, name.to_string()));
+                }
+            }
+        }
+        tags.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        let tag_names: Vec<String> = tags.into_iter().take(8).map(|(_, n)| n).collect();
+
+        items.push(VndbItem {
+            id: it.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            title: it.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            released: it.get("released").and_then(|v| v.as_str()).map(|s| s.to_string()),
+            image: it
+                .get("image")
+                .and_then(|v| v.get("url"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            rating: it.get("rating").and_then(|v| v.as_f64()),
+            description: it.get("description").and_then(|v| v.as_str()).map(|s| s.to_string()),
+            tags: tag_names,
+        });
+    }
+    Ok(items)
+}
+
+#[tauri::command]
+async fn download_cover(
+    app: tauri::AppHandle,
+    url: String,
+    proxy_mode: String,
+    proxy_url: String,
+    data_dir: String,
+) -> Result<String, String> {
+    let covers_dir = resolve_data_dir(&app, &data_dir).join("covers");
+    std::fs::create_dir_all(&covers_dir).map_err(|e| format!("无法创建封面目录: {e}"))?;
+
+    let resp = send_with_fallback(
+        |client| client.get(url.clone()).header("User-Agent", UA_BANGUMI),
+        &proxy_mode,
+        &proxy_url,
+    )
+    .await?;
+    let resp = check_status(resp, "封面下载").await?;
+    let bytes = resp
+        .bytes()
+        .await
+        .map_err(|e| format!("下载封面失败: {e}"))?;
+    if bytes.len() > 15 * 1024 * 1024 {
+        return Err("封面文件过大".to_string());
+    }
+
+    let parsed = reqwest::Url::parse(&url).map_err(|e| e.to_string())?;
+    let ext = parsed
+        .path_segments()
+        .and_then(|mut segs| segs.next_back())
+        .and_then(|name| name.rfind('.').map(|i| &name[i + 1..]))
+        .map(|e| e.to_lowercase())
+        .filter(|e| matches!(e.as_str(), "jpg" | "jpeg" | "png" | "webp" | "gif" | "avif" | "bmp"))
+        .unwrap_or_else(|| "jpg".to_string());
+
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_nanos();
+    let file_name = format!("cover_{}.{}", nanos, ext);
+    let dest = covers_dir.join(&file_name);
+
+    std::fs::write(&dest, &bytes).map_err(|e| format!("保存封面失败: {e}"))?;
+    Ok(dest.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+fn save_background(app: tauri::AppHandle, source_path: String, data_dir: String) -> Result<String, String> {
+    let base = resolve_data_dir(&app, &data_dir);
+    let bg_dir = base.join("backgrounds");
+    std::fs::create_dir_all(&bg_dir).map_err(|e| format!("无法创建背景目录: {e}"))?;
+
+    let ext = std::path::Path::new(&source_path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("png")
+        .to_string();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_nanos();
+    let file_name = format!("bg_{}.{}", nanos, ext);
+    let dest = bg_dir.join(&file_name);
+
+    std::fs::copy(&source_path, &dest).map_err(|e| format!("复制背景图片失败: {e}"))?;
+    Ok(dest.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+fn save_cover(app: tauri::AppHandle, source_path: String, data_dir: String) -> Result<String, String> {
+    let covers_dir = resolve_data_dir(&app, &data_dir).join("covers");
+    std::fs::create_dir_all(&covers_dir).map_err(|e| format!("无法创建封面目录: {e}"))?;
+
+    let ext = std::path::Path::new(&source_path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("png")
+        .to_string();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_nanos();
+    let file_name = format!("cover_{}.{}", nanos, ext);
+    let dest = covers_dir.join(&file_name);
+
+    std::fs::copy(&source_path, &dest).map_err(|e| format!("复制封面失败: {e}"))?;
+    Ok(dest.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+fn get_data_dir(app: tauri::AppHandle) -> Result<String, String> {
+    let dir = app
+        .path()
+        .app_config_dir()
+        .map_err(|e| format!("无法获取应用配置目录: {e}"))?;
+    Ok(dir.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+fn open_data_dir(app: tauri::AppHandle, data_dir: String) -> Result<(), String> {
+    let dir = resolve_data_dir(&app, &data_dir);
+    std::process::Command::new("explorer")
+        .arg(&dir)
+        .spawn()
+        .map_err(|e| format!("打开目录失败: {e}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+async fn backup_database(app: tauri::AppHandle, keep: u32, data_dir: String) -> Result<String, String> {
+    let base = resolve_data_dir(&app, &data_dir);
+    let db_path = base.join("acg.db");
+    let backups_dir = base.join("backups");
+    std::fs::create_dir_all(&backups_dir).map_err(|e| format!("无法创建备份目录: {e}"))?;
+
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_nanos();
+    let dest = backups_dir.join(format!("acg_{}.db", nanos));
+    let target = dest.to_string_lossy().replace('\\', "/");
+
+    let opts = sqlx::sqlite::SqliteConnectOptions::new()
+        .filename(&db_path)
+        .create_if_missing(false);
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(opts)
+        .await
+        .map_err(|e| format!("打开数据库失败: {e}"))?;
+    sqlx::query(&format!("VACUUM INTO '{}'", target))
+        .execute(&pool)
+        .await
+        .map_err(|e| format!("备份失败: {e}"))?;
+    pool.close().await;
+
+    let keep = keep.max(1);
+    let mut files: Vec<_> = std::fs::read_dir(&backups_dir)
+        .map_err(|e| e.to_string())?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| {
+            p.extension().and_then(|x| x.to_str()) == Some("db")
+                && p.file_name()
+                    .and_then(|x| x.to_str())
+                    .map(|n| n.starts_with("acg_"))
+                    .unwrap_or(false)
+        })
+        .collect();
+    files.sort_by_key(|p| {
+        p.file_name()
+            .and_then(|n| n.to_str())
+            .and_then(|n| n.strip_prefix("acg_"))
+            .and_then(|s| s.strip_suffix(".db"))
+            .and_then(|s| s.parse::<u128>().ok())
+            .unwrap_or(0)
+    });
+    for old in files.iter().take(files.len().saturating_sub(keep as usize)) {
+        let _ = std::fs::remove_file(old);
+    }
+
+    Ok(dest.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+fn get_bootstrap_data_dir(app: tauri::AppHandle) -> Result<String, String> {
+    let cfg = app
+        .path()
+        .app_config_dir()
+        .map_err(|e| format!("无法获取应用配置目录: {e}"))?;
+    Ok(bootstrap_data_dir_from(&cfg))
+}
+
+#[tauri::command]
+fn set_bootstrap_data_dir(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    let cfg = app
+        .path()
+        .app_config_dir()
+        .map_err(|e| format!("无法获取应用配置目录: {e}"))?;
+    std::fs::create_dir_all(&cfg).map_err(|e| format!("创建目录失败: {e}"))?;
+    let file = cfg.join("data_dir.json");
+    let payload = serde_json::json!({ "dataDir": path });
+    let text = serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?;
+    std::fs::write(&file, text).map_err(|e| format!("写入引导文件失败: {e}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+fn ensure_data_dir(app: tauri::AppHandle, dir: String) -> Result<(), String> {
+    let d = resolve_data_dir(&app, &dir);
+    std::fs::create_dir_all(&d).map_err(|e| format!("创建目录失败: {e}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+async fn migrate_data_dir(app: tauri::AppHandle, new_dir: String) -> Result<String, String> {
+    let target = std::path::PathBuf::from(new_dir.trim());
+    if target.as_os_str().is_empty() {
+        return Err("目录不能为空".to_string());
+    }
+    std::fs::create_dir_all(&target).map_err(|e| format!("创建目录失败: {e}"))?;
+
+    let target_db = target.join("acg.db");
+    if !target_db.exists() {
+        let src = current_db_path(&app);
+        if src.exists() {
+            let dest = target_db.to_string_lossy().replace('\\', "/");
+            let opts = sqlx::sqlite::SqliteConnectOptions::new()
+                .filename(&src)
+                .create_if_missing(false);
+            let pool = sqlx::sqlite::SqlitePoolOptions::new()
+                .max_connections(1)
+                .connect_with(opts)
+                .await
+                .map_err(|e| format!("打开数据库失败: {e}"))?;
+            sqlx::query(&format!("VACUUM INTO '{}'", dest))
+                .execute(&pool)
+                .await
+                .map_err(|e| format!("迁移数据库失败: {e}"))?;
+            pool.close().await;
+        }
+    }
+
+    let src_covers = current_covers_dir(&app);
+    let dst_covers = target.join("covers");
+    if src_covers.exists() && !dst_covers.exists() {
+        std::fs::create_dir_all(&dst_covers).map_err(|e| format!("创建封面目录失败: {e}"))?;
+        for entry in std::fs::read_dir(&src_covers).map_err(|e| e.to_string())? {
+            if let Ok(e) = entry {
+                let from = e.path();
+                let to = dst_covers.join(e.file_name());
+                if from.is_file() && !to.exists() {
+                    let _ = std::fs::copy(&from, &to);
+                }
+            }
+        }
+    }
+
+    Ok(target.to_string_lossy().into_owned())
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_sql::Builder::default().build())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_opener::init())
+        .invoke_handler(tauri::generate_handler![
+            search_bangumi,
+            search_vndb,
+            download_cover,
+            save_cover,
+            save_background,
+            get_data_dir,
+            open_data_dir,
+            backup_database,
+            get_bootstrap_data_dir,
+            set_bootstrap_data_dir,
+            ensure_data_dir,
+            migrate_data_dir
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod api_tests {
+    use super::*;
+
+
+    #[tokio::test]
+    async fn check_bangumi() {
+        let (pm, pu) = ("auto".to_string(), String::new());
+        match search_bangumi(
+            "命运石之门".to_string(),
+            vec![],
+            30,
+            "https://api.bgm.tv".to_string(),
+            pm,
+            pu,
+        )
+        .await
+        {
+            Ok(v) => println!(
+                "BANGUMI OK count={} first={:?}",
+                v.len(),
+                v.first().map(|x| (x.id, x.name_cn.clone(), x.score, x.eps, x.volumes, x.total_episodes, x.tags.len(), x.image.clone()))
+            ),
+            Err(e) => println!("BANGUMI ERR {e}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn check_bangumi_anime_filter() {
+        let (pm, pu) = ("auto".to_string(), String::new());
+        match search_bangumi(
+            "命运石之门".to_string(),
+            vec![2],
+            30,
+            "https://api.bgm.tv".to_string(),
+            pm,
+            pu,
+        )
+        .await
+        {
+            Ok(v) => println!(
+                "BANGUMI ANIME OK count={} first={:?}",
+                v.len(),
+                v.first().map(|x| (x.id, x.name_cn.clone(), x.image.clone()))
+            ),
+            Err(e) => println!("BANGUMI ANIME ERR {e}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn check_vndb() {
+        let (pm, pu) = ("auto".to_string(), String::new());
+        match search_vndb(
+            "CLANNAD".to_string(),
+            30,
+            "https://api.vndb.org".to_string(),
+            pm,
+            pu,
+        )
+        .await
+        {
+            Ok(v) => println!(
+                "VNDB OK count={} first={:?}",
+                v.len(),
+                v.first().map(|x| (x.id.clone(), x.title.clone(), x.rating, x.tags.len(), x.image.clone()))
+            ),
+            Err(e) => println!("VNDB ERR {e}"),
+        }
+    }
+}
