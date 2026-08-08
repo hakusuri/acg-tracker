@@ -29,3 +29,5 @@ src-tauri/gen/schemas/
 
 # Local deliverables (published via GitHub Releases instead)
 outputs/
+# 本地应用数据（自定义数据目录测试产生，不入库）
+save_data/

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { open } from '@tauri-apps/plugin-dialog';
 import { readTextFile } from '@tauri-apps/plugin-fs';
 import WorkForm from '../components/WorkForm';
@@ -54,6 +54,16 @@ export default function ImportPage() {
   const [quickOpen, setQuickOpen] = useState(false);
   const [adding, setAdding] = useState(false);
   const { settings } = useSettings();
+
+  // 搜索始终全类别；展示结果按当前类别实时筛选
+  const shownApiResults = useMemo(() => {
+    if (!apiResults) return null;
+    if (apiSource === 'bangumi' && apiCategory !== 'all') {
+      const allowed = bangumiTypes(apiCategory);
+      return apiResults.filter((it) => allowed.includes((it as BangumiItem).btype));
+    }
+    return apiResults;
+  }, [apiResults, apiSource, apiCategory]);
 
   const pickFile = async (kind: 'mal' | 'bangumi') => {
     const file = await open({
@@ -152,15 +162,8 @@ export default function ImportPage() {
         proxyUrl: settings.proxyUrl,
       };
       const res = apiSource === 'bangumi' ? await searchBangumi(kw, [], cfg) : await searchVndb(kw, cfg);
-      let shown = res;
-      if (apiSource === 'bangumi') {
-        const bgRes = res as BangumiItem[];
-        const allowed = bangumiTypes(apiCategory);
-        shown = apiCategory === 'all' ? bgRes : bgRes.filter((it) => allowed.includes(it.btype));
-      }
-      setApiResults(shown);
+      setApiResults(res);
       if (res.length === 0) setApiError('没有找到相关结果，换个关键词试试');
-      else if (shown.length === 0) setApiError('该类别下没有匹配结果，试试切换类别');
       else setApiError('');
     } catch (e) {
       setApiError(`搜索失败：${String(e)}`);
@@ -420,9 +423,19 @@ export default function ImportPage() {
 
           {apiError && <div className="msg msg-error">{apiError}</div>}
 
-          {apiResults && apiResults.length > 0 && (
+          {apiResults && apiResults.length > 0 && shownApiResults && shownApiResults.length === 0 && (
+            <div className="msg">该类别下没有匹配结果，试试切换类别</div>
+          )}
+
+          {shownApiResults && shownApiResults.length > 0 && apiSource === 'bangumi' && apiCategory !== 'all' && (
+            <div className="api-count">
+              共 {apiResults?.length ?? 0} 条结果，当前显示 {shownApiResults.length} 条（{CATEGORY_LABELS[apiCategory]}）
+            </div>
+          )}
+
+          {shownApiResults && shownApiResults.length > 0 && (
             <div className="api-results glass">
-              {apiResults.map((item) => {
+              {shownApiResults.map((item) => {
                 const bg = item as BangumiItem;
                 const vn = item as VndbItem;
                 const title = isBangumiResults ? (bg.nameCn || bg.name) : vn.title;
