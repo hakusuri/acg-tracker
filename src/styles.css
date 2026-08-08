@@ -1328,6 +1328,11 @@ td {
   padding: 0;
 }
 
+.toggle:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .toggle.on {
   background: linear-gradient(135deg, #6f9bff, #a78bfa);
 }

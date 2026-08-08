@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { readTextFile, writeTextFile } from '@tauri-apps/plugin-fs';
 import GlassModal from '../components/GlassModal';
-import { backupDatabase, checkUpdate, deleteBackground, downloadCover, getDataDir, migrateDataDir, openDataDir, pathExists, saveBackground, setBootstrapDataDir, toAssetUrl } from '../lib/api';
+import { backupDatabase, checkUpdate, deleteBackground, deleteCoverFile, downloadCover, getDataDir, migrateDataDir, openDataDir, pathExists, saveBackground, setBootstrapDataDir, toAssetUrl } from '../lib/api';
 import { openExternal } from '../lib/api';
 import { CATEGORIES, CATEGORY_LABELS, STATUSES, STATUS_LABELS } from '../lib/constants';
 import { clearWorks, getSetting, insertWork, listWorks, reloadDatabase, setSetting, updateWork } from '../lib/db';
@@ -38,13 +38,14 @@ function SettingRow({ label, desc, children }: { label: string; desc?: string; c
   );
 }
 
-function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
+function Toggle({ checked, onChange, disabled }: { checked: boolean; onChange: (v: boolean) => void; disabled?: boolean }) {
   return (
     <button
       type="button"
       className={`toggle ${checked ? 'on' : ''}`}
       onClick={() => onChange(!checked)}
       aria-pressed={checked}
+      disabled={disabled}
     >
       <span className="toggle-knob" />
     </button>
@@ -68,6 +69,7 @@ export default function SettingsPage() {
   const [confirmClear, setConfirmClear] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<UpdateCheck | null>(null);
   const [updating, setUpdating] = useState(false);
+  const [confirmClearCache, setConfirmClearCache] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -174,7 +176,7 @@ export default function SettingsPage() {
     const localOk = localPath ? await pathExists(localPath) : false;
 
     if (remote && !localOk) {
-      if (settings.downloadCovers) {
+      if (settings.downloadCovers && settings.cacheCovers) {
         try {
           return {
             path: await downloadCover(remote, { proxyMode: settings.proxyMode, proxyUrl: settings.proxyUrl, dataDir: settings.dataDir }),
@@ -291,35 +293,28 @@ export default function SettingsPage() {
     source: w.source,
   });
 
-  const repairCovers = async () => {
+  const clearCoverCache = async () => {
+    setConfirmClearCache(false);
     setBusy(true);
     setMessage('');
     try {
       const works = await listWorks();
-      let fixed = 0;
+      let cleared = 0;
       for (const w of works) {
         const isRemote = /^https?:\/\//i.test(w.cover_path);
-        const localOk = isRemote ? true : w.cover_path ? await pathExists(w.cover_path) : false;
-        const remote = w.cover_url || (isRemote ? w.cover_path : '');
-        if (!remote || (w.cover_path && localOk)) continue;
-        if (!settings.downloadCovers) {
-          if (w.cover_path !== remote) {
-            await updateWork(w.id, { ...workToInput(w), cover_path: remote });
-            fixed++;
-          }
-          continue;
-        }
+        if (!w.cover_path || isRemote) continue;
         try {
-          const local = await downloadCover(remote, { proxyMode: settings.proxyMode, proxyUrl: settings.proxyUrl, dataDir: settings.dataDir });
-          await updateWork(w.id, { ...workToInput(w), cover_path: local });
-          fixed++;
+          await deleteCoverFile(w.cover_path, settings.dataDir);
         } catch {
-          // 单条失败跳过
+          // 单个删除失败继续
         }
+        await updateWork(w.id, { ...workToInput(w), cover_path: '' });
+        cleared++;
       }
-      setMessage(`封面修复完成：更新 ${fixed} 条`);
+      setMessage(`已清除 ${cleared} 条作品的本地封面缓存（在线地址已保留）`);
+      await refresh();
     } catch (e) {
-      setMessage(`修复封面失败：${String(e)}`);
+      setMessage(`清除封面缓存失败：${String(e)}`);
     } finally {
       setBusy(false);
     }
@@ -450,6 +445,13 @@ export default function SettingsPage() {
           <SettingRow label="自动下载封面" desc="API 导入时把封面保存到本地（更稳定）">
             <Toggle checked={settings.downloadCovers} onChange={(v) => patch('downloadCovers', v)} />
           </SettingRow>
+          <SettingRow label="缓存封面文件" desc="关闭后导入只保存在线地址、不写入本地文件；需先开启自动下载封面">
+            <Toggle
+              checked={settings.cacheCovers}
+              onChange={(v) => patch('cacheCovers', v)}
+              disabled={!settings.downloadCovers}
+            />
+          </SettingRow>
         </section>
 
         <section className="glass settings-section">
@@ -527,9 +529,9 @@ export default function SettingsPage() {
               {busy ? '处理中…' : '导入 JSON'}
             </button>
           </SettingRow>
-          <SettingRow label="修复失效封面" desc="本地封面缺失时按在线 URL 重新下载（受「自动下载封面」开关控制）">
-            <button className="btn ghost" type="button" onClick={() => void repairCovers()} disabled={busy}>
-              {busy ? '处理中…' : '修复封面'}
+          <SettingRow label="清除本地封面缓存" desc="删除全部作品的本地封面文件并清空路径，保留在线地址（封面仍可正常显示）">
+            <button className="btn ghost" type="button" onClick={() => setConfirmClearCache(true)} disabled={busy}>
+              清除缓存
             </button>
           </SettingRow>
           <SettingRow label="清空数据" desc="删除全部作品记录（不可恢复）">
@@ -567,6 +569,14 @@ export default function SettingsPage() {
           </SettingRow>
         </section>
       </div>
+
+      <GlassModal open={confirmClearCache} onClose={() => setConfirmClearCache(false)} title="清除本地封面缓存">
+        <p className="confirm-text">将删除全部作品的本地封面文件并清空本地路径；在线地址会保留，封面仍可正常显示（需联网）。确定继续吗？</p>
+        <div className="modal-foot">
+          <button className="btn ghost" type="button" onClick={() => setConfirmClearCache(false)}>取消</button>
+          <button className="btn danger" type="button" onClick={() => void clearCoverCache()}>确认清除</button>
+        </div>
+      </GlassModal>
 
       <GlassModal open={confirmClear} onClose={() => setConfirmClear(false)} title="清空全部数据">
         <p className="confirm-text">确定要删除全部作品记录吗？此操作不可恢复，建议先导出备份。</p>

@@ -20,6 +20,7 @@ export interface AppSettings {
   defaultSort: SortKey;
   searchLimit: number;
   downloadCovers: boolean;
+  cacheCovers: boolean;
   proxyMode: ProxyMode;
   proxyUrl: string;
   bangumiApiBase: string;
@@ -38,6 +39,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   defaultSort: 'created_desc',
   searchLimit: 30,
   downloadCovers: true,
+  cacheCovers: true,
   proxyMode: 'auto',
   proxyUrl: '',
   bangumiApiBase: 'https://api.bgm.tv',
@@ -56,6 +58,7 @@ const SETTING_KEYS: Record<keyof AppSettings, string> = {
   defaultSort: 'default_sort',
   searchLimit: 'search_limit',
   downloadCovers: 'download_covers',
+  cacheCovers: 'cache_covers',
   proxyMode: 'proxy_mode',
   proxyUrl: 'proxy_url',
   bangumiApiBase: 'bangumi_api_base',
@@ -89,7 +92,7 @@ async function loadSettings(): Promise<AppSettings> {
   const read = (key: string) => getSetting(key);
   const [
     theme, density, defaultCategory, defaultStatus, defaultSort, searchLimit,
-    downloadCovers, proxyMode, proxyUrl, bangumiApiBase, vndbApiBase, autoBackup, backupCount,
+    downloadCovers, cacheCovers, proxyMode, proxyUrl, bangumiApiBase, vndbApiBase, autoBackup, backupCount,
     backgroundImage,
   ] = await Promise.all([
     read(SETTING_KEYS.theme),
@@ -99,6 +102,7 @@ async function loadSettings(): Promise<AppSettings> {
     read(SETTING_KEYS.defaultSort),
     read(SETTING_KEYS.searchLimit),
     read(SETTING_KEYS.downloadCovers),
+    read(SETTING_KEYS.cacheCovers),
     read(SETTING_KEYS.proxyMode),
     read(SETTING_KEYS.proxyUrl),
     read(SETTING_KEYS.bangumiApiBase),
@@ -118,6 +122,7 @@ async function loadSettings(): Promise<AppSettings> {
     defaultSort: pick(defaultSort, SORTS, DEFAULT_SETTINGS.defaultSort),
     searchLimit: num(searchLimit, 10, 50, DEFAULT_SETTINGS.searchLimit),
     downloadCovers: bool(downloadCovers, DEFAULT_SETTINGS.downloadCovers),
+    cacheCovers: bool(cacheCovers, DEFAULT_SETTINGS.cacheCovers),
     proxyMode: pick(proxyMode, PROXY_MODES, DEFAULT_SETTINGS.proxyMode),
     proxyUrl: proxyUrl ?? DEFAULT_SETTINGS.proxyUrl,
     bangumiApiBase: bangumiApiBase || DEFAULT_SETTINGS.bangumiApiBase,

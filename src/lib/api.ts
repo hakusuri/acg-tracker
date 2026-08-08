@@ -44,6 +44,7 @@ export const downloadCover = (url: string, cfg: CoverDownloadConfig) =>
 
 export const saveBackground = (sourcePath: string, dataDir: string) => invoke<string>('save_background', { sourcePath, dataDir });
 export const deleteBackground = (path: string, dataDir: string) => invoke<void>('delete_background', { path, dataDir });
+export const deleteCoverFile = (path: string, dataDir: string) => invoke<void>('delete_cover_file', { path, dataDir });
 
 export const saveCover = (sourcePath: string, dataDir: string) =>
   invoke<string>('save_cover', { sourcePath, dataDir });

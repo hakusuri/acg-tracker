@@ -446,6 +446,30 @@ fn save_background(app: tauri::AppHandle, source_path: String, data_dir: String)
 }
 
 #[tauri::command]
+fn delete_cover_file(app: tauri::AppHandle, path: String, data_dir: String) -> Result<(), String> {
+    let base = resolve_data_dir(&app, &data_dir);
+    let covers_dir = base.join("covers");
+    if !covers_dir.exists() {
+        return Ok(());
+    }
+    let target = std::path::PathBuf::from(&path);
+    if !target.exists() {
+        return Ok(());
+    }
+    let covers_canon = covers_dir
+        .canonicalize()
+        .map_err(|e| format!("解析封面目录失败: {e}"))?;
+    let target_canon = target
+        .canonicalize()
+        .map_err(|e| format!("解析封面文件失败: {e}"))?;
+    if !target_canon.starts_with(&covers_canon) {
+        return Err("只能删除封面目录内的文件".to_string());
+    }
+    std::fs::remove_file(&target_canon).map_err(|e| format!("删除封面文件失败: {e}"))?;
+    Ok(())
+}
+
+#[tauri::command]
 fn delete_background(app: tauri::AppHandle, path: String, data_dir: String) -> Result<(), String> {
     let base = resolve_data_dir(&app, &data_dir);
     let bg_dir = base.join("backgrounds");
@@ -768,6 +792,7 @@ pub fn run() {
             save_cover,
             save_background,
             delete_background,
+            delete_cover_file,
             get_data_dir,
             open_data_dir,
             backup_database,

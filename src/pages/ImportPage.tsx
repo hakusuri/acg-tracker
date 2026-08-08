@@ -186,7 +186,7 @@ export default function ImportPage() {
               : btypeCat;
     const year = item.date ? parseInt(item.date.slice(0, 4), 10) || null : null;
     let cover = item.image ?? '';
-    if (cover && settings.downloadCovers) {
+    if (cover && settings.downloadCovers && settings.cacheCovers) {
       setAdding(true);
       try {
         cover = await downloadCover(cover, { proxyMode: settings.proxyMode, proxyUrl: settings.proxyUrl, dataDir: settings.dataDir });
@@ -220,7 +220,7 @@ export default function ImportPage() {
   const addFromVndb = async (item: VndbItem) => {
     const year = item.released ? parseInt(item.released.slice(0, 4), 10) || null : null;
     let cover = item.image ?? '';
-    if (cover && settings.downloadCovers) {
+    if (cover && settings.downloadCovers && settings.cacheCovers) {
       setAdding(true);
       try {
         cover = await downloadCover(cover, { proxyMode: settings.proxyMode, proxyUrl: settings.proxyUrl, dataDir: settings.dataDir });
