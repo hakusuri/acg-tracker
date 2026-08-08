@@ -85,6 +85,7 @@ export default function WorkForm({ open, work, prefill, onClose, onSaved }: Prop
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
   const [coverBusy, setCoverBusy] = useState(false);
+  const [pendingDeletePaths, setPendingDeletePaths] = useState<string[]>([]);
 
   useEffect(() => {
     if (!open) return;
@@ -126,6 +127,7 @@ export default function WorkForm({ open, work, prefill, onClose, onSaved }: Prop
       setForm(base);
     }
     setError('');
+    setPendingDeletePaths([]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, work, prefill]);
 
@@ -144,16 +146,12 @@ export default function WorkForm({ open, work, prefill, onClose, onSaved }: Prop
     set(key, Number.isNaN(n as number) ? null : n);
   };
 
-  const clearCover = async () => {
+  const clearCover = () => {
     const path = form.cover_path;
     set('cover_path', '');
-    // 本地缓存封面：同步删除文件（在线地址 cover_url 保留）
+    // 仅记录待删除的本地文件，保存时才真正删除；取消则保留
     if (path && !/^https?:\/\//i.test(path)) {
-      try {
-        await deleteCoverFile(path, settings.dataDir);
-      } catch {
-        // 删除失败不阻塞清除
-      }
+      setPendingDeletePaths((list) => (list.includes(path) ? list : [...list, path]));
     }
   };
 
@@ -169,6 +167,7 @@ export default function WorkForm({ open, work, prefill, onClose, onSaved }: Prop
       const saved = await saveCover(file, settings.dataDir);
       set('cover_path', saved);
       set('cover_url', '');
+      setPendingDeletePaths((list) => list.filter((p) => p !== saved));
     } catch (e) {
       setError(`封面保存失败：${String(e)}`);
     } finally {
@@ -198,6 +197,15 @@ export default function WorkForm({ open, work, prefill, onClose, onSaved }: Prop
         await updateWork(work.id, payload);
       } else {
         id = await insertWork(payload);
+      }
+      // 保存成功后再删除被清除的本地封面文件（取消则文件保留）
+      for (const p of pendingDeletePaths) {
+        if (p === payload.cover_path) continue;
+        try {
+          await deleteCoverFile(p, settings.dataDir);
+        } catch {
+          // 单个删除失败忽略
+        }
       }
       onSaved(id);
     } catch (e) {
