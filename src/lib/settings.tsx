@@ -182,11 +182,10 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   }, [settings.theme, settings.density]);
 
   useEffect(() => {
-    if (settings.dataDir) {
-      void allowAssetDir(settings.dataDir).catch(() => {
-        // 白名单添加失败不阻塞使用
-      });
-    }
+    // 始终把当前数据目录加入资源白名单（自定义目录或默认的程序目录/data）
+    void allowAssetDir(settings.dataDir).catch(() => {
+      // 白名单添加失败不阻塞使用
+    });
   }, [settings.dataDir]);
 
   return <SettingsContext.Provider value={{ settings, loaded, update }}>{children}</SettingsContext.Provider>;

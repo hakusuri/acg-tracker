@@ -15,6 +15,7 @@ export interface WorkFormPrefill {
   season?: Season | null;
   synopsis?: string;
   cover_path?: string;
+  cover_url?: string;
   rating?: number | null;
   total_count?: number | null;
   tags?: string;
@@ -45,6 +46,7 @@ function emptyForm(defaults: { category: Category; status: Status }): WorkInput 
     tags: '',
     notes: '',
     cover_path: '',
+    cover_url: '',
     links: '',
     source: 'manual',
   };
@@ -101,6 +103,7 @@ export default function WorkForm({ open, work, prefill, onClose, onSaved }: Prop
         tags: work.tags,
         notes: work.notes,
         cover_path: work.cover_path,
+        cover_url: work.cover_url ?? (/^https?:\/\//i.test(work.cover_path) ? work.cover_path : ''),
         links: formatLinks(work.links),
         source: work.source,
       });
@@ -113,6 +116,7 @@ export default function WorkForm({ open, work, prefill, onClose, onSaved }: Prop
         base.season = prefill.season ?? null;
         base.synopsis = prefill.synopsis ?? '';
         base.cover_path = prefill.cover_path ?? '';
+        base.cover_url = prefill.cover_url ?? (/^https?:\/\//i.test(prefill.cover_path ?? '') ? prefill.cover_path : '');
         base.rating = prefill.rating ?? null;
         base.total_count = prefill.total_count ?? null;
         base.tags = prefill.tags ?? '';
@@ -151,6 +155,7 @@ export default function WorkForm({ open, work, prefill, onClose, onSaved }: Prop
     try {
       const saved = await saveCover(file, settings.dataDir);
       set('cover_path', saved);
+      set('cover_url', '');
     } catch (e) {
       setError(`封面保存失败：${String(e)}`);
     } finally {
@@ -172,6 +177,7 @@ export default function WorkForm({ open, work, prefill, onClose, onSaved }: Prop
         title,
         season: form.category === 'anime' ? form.season : null,
         tags: form.tags.trim(),
+        cover_url: form.cover_url ?? '',
         links: JSON.stringify(parseLinks(form.links)),
       };
       let id = work?.id ?? 0;
@@ -285,7 +291,11 @@ export default function WorkForm({ open, work, prefill, onClose, onSaved }: Prop
               <input
                 className="input"
                 value={/^https?:\/\//i.test(form.cover_path) ? form.cover_path : ''}
-                onChange={(e) => set('cover_path', e.target.value.trim())}
+                onChange={(e) => {
+                  const v = e.target.value.trim();
+                  set('cover_path', v);
+                  set('cover_url', v);
+                }}
                 placeholder="或粘贴图片 URL"
               />
               {form.cover_path && (

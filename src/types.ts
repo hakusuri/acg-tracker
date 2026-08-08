@@ -17,6 +17,7 @@ export interface Work {
   tags: string;
   notes: string;
   cover_path: string;
+  cover_url?: string;
   links: string;
   source: string;
   created_at: string;
@@ -37,6 +38,7 @@ export interface WorkInput {
   tags: string;
   notes: string;
   cover_path: string;
+  cover_url?: string;
   links: string;
   source: string;
 }
@@ -69,6 +71,13 @@ export interface VndbItem {
   rating: number | null;
   description: string | null;
   tags: string[];
+}
+
+export interface UpdateCheck {
+  latestVersion: string;
+  htmlUrl: string;
+  publishedAt: string;
+  isNewer: boolean;
 }
 
 export interface ImportRow {

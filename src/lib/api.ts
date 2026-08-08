@@ -1,6 +1,6 @@
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { openUrl } from '@tauri-apps/plugin-opener';
-import type { BangumiItem, VndbItem } from '../types';
+import type { BangumiItem, UpdateCheck, VndbItem } from '../types';
 
 export interface ApiRequestConfig {
   limit: number;
@@ -53,6 +53,9 @@ export const openDataDir = (dataDir: string) => invoke<void>('open_data_dir', { 
 export const backupDatabase = (keep: number, dataDir: string) => invoke<string>('backup_database', { keep, dataDir });
 
 export const allowAssetDir = (dir: string) => invoke<void>('allow_asset_dir', { dir });
+export const migrateLegacyData = () => invoke<void>('migrate_legacy_data');
+export const pathExists = (path: string) => invoke<boolean>('path_exists', { path });
+export const checkUpdate = (currentVersion: string, feedUrl: string) => invoke<UpdateCheck>('check_update', { currentVersion, feedUrl });
 export const getBootstrapDataDir = () => invoke<string>('get_bootstrap_data_dir');
 export const setBootstrapDataDir = (path: string) => invoke<void>('set_bootstrap_data_dir', { path });
 export const ensureDataDir = (dir: string) => invoke<void>('ensure_data_dir', { dir });

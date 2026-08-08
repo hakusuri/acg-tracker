@@ -45,14 +45,31 @@ fn base_url(api_base: &str, default: &str) -> String {
     }
 }
 
-/// 数据目录：自定义目录优先，空值回退到默认应用配置目录。
+/// 默认数据目录：程序所在目录下的 data/（安装/便携版数据跟随程序目录）。
+fn default_data_dir(app: &tauri::AppHandle) -> std::path::PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        .unwrap_or_else(|| app.path().app_config_dir().unwrap_or_default())
+        .join("data")
+}
+
+/// 数据目录：自定义目录优先，空值回退到默认目录（程序目录/data）。
 fn resolve_data_dir(app: &tauri::AppHandle, custom: &str) -> std::path::PathBuf {
     let trimmed = custom.trim();
     if trimmed.is_empty() {
-        app.path().app_config_dir().unwrap_or_default()
+        default_data_dir(app)
     } else {
         std::path::PathBuf::from(trimmed)
     }
+}
+
+/// 解析语义化版本号 x.y.z（忽略前缀 v）。
+fn parse_version(v: &str) -> (u64, u64, u64) {
+    let s = v.trim().trim_start_matches('v');
+    let parts: Vec<&str> = s.split('.').collect();
+    let get = |i: usize| parts.get(i).and_then(|p| p.parse::<u64>().ok()).unwrap_or(0);
+    (get(0), get(1), get(2))
 }
 
 fn bootstrap_data_dir_from(cfg_dir: &std::path::Path) -> String {
@@ -475,11 +492,7 @@ fn save_cover(app: tauri::AppHandle, source_path: String, data_dir: String) -> R
 
 #[tauri::command]
 fn get_data_dir(app: tauri::AppHandle) -> Result<String, String> {
-    let dir = app
-        .path()
-        .app_config_dir()
-        .map_err(|e| format!("无法获取应用配置目录: {e}"))?;
-    Ok(dir.to_string_lossy().into_owned())
+    Ok(default_data_dir(&app).to_string_lossy().into_owned())
 }
 
 #[tauri::command]
@@ -571,6 +584,113 @@ fn set_bootstrap_data_dir(app: tauri::AppHandle, path: String) -> Result<(), Str
     Ok(())
 }
 
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateCheck {
+    pub latest_version: String,
+    pub html_url: String,
+    pub published_at: String,
+    pub is_newer: bool,
+}
+
+/// 把旧默认目录（%APPDATA%/com.acg.tracker）中的数据迁移到新的默认目录（程序目录/data）。
+#[tauri::command]
+async fn migrate_legacy_data(app: tauri::AppHandle) -> Result<(), String> {
+    let default_dir = default_data_dir(&app);
+    let old_dir = app
+        .path()
+        .app_config_dir()
+        .map_err(|e| format!("无法获取旧数据目录: {e}"))?;
+    let new_db = default_dir.join("acg.db");
+    let old_db = old_dir.join("acg.db");
+    if new_db.exists() || !old_db.exists() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(&default_dir).map_err(|e| format!("创建数据目录失败: {e}"))?;
+
+    let dest = new_db.to_string_lossy().replace('\\', "/");
+    let opts = sqlx::sqlite::SqliteConnectOptions::new()
+        .filename(&old_db)
+        .create_if_missing(false);
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(opts)
+        .await
+        .map_err(|e| format!("打开旧数据库失败: {e}"))?;
+    sqlx::query(&format!("VACUUM INTO '{}'", dest))
+        .execute(&pool)
+        .await
+        .map_err(|e| format!("迁移数据库失败: {e}"))?;
+    pool.close().await;
+
+    for sub in ["covers", "backgrounds", "backups"] {
+        let src = old_dir.join(sub);
+        let dst = default_dir.join(sub);
+        if src.exists() && !dst.exists() {
+            std::fs::create_dir_all(&dst).map_err(|e| format!("创建目录失败: {e}"))?;
+            for entry in std::fs::read_dir(&src).map_err(|e| e.to_string())? {
+                if let Ok(e) = entry {
+                    let from = e.path();
+                    let to = dst.join(e.file_name());
+                    if from.is_file() && !to.exists() {
+                        let _ = std::fs::copy(&from, &to);
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn path_exists(path: String) -> bool {
+    std::path::Path::new(&path).exists()
+}
+
+#[tauri::command]
+async fn check_update(current_version: String, feed_url: String) -> Result<UpdateCheck, String> {
+    let url = if feed_url.trim().is_empty() {
+        "https://api.github.com/repos/hakusuri/acg-tracker/releases/latest".to_string()
+    } else {
+        feed_url.trim().to_string()
+    };
+    let resp = send_with_fallback(
+        |client| client.get(url.clone()).header("User-Agent", UA_BANGUMI),
+        "auto",
+        "",
+    )
+    .await?;
+    let resp = check_status(resp, "更新检查").await?;
+    let body: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("更新响应解析失败: {e}"))?;
+
+    let latest_version = body
+        .get("tag_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let html_url = body
+        .get("html_url")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let published_at = body
+        .get("published_at")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let is_newer = !latest_version.is_empty() && parse_version(&latest_version) > parse_version(&current_version);
+
+    Ok(UpdateCheck {
+        latest_version,
+        html_url,
+        published_at,
+        is_newer,
+    })
+}
+
 #[tauri::command]
 fn allow_asset_dir(app: tauri::AppHandle, dir: String) -> Result<(), String> {
     let d = resolve_data_dir(&app, &dir);
@@ -652,6 +772,9 @@ pub fn run() {
             open_data_dir,
             backup_database,
             allow_asset_dir,
+            migrate_legacy_data,
+            path_exists,
+            check_update,
             get_bootstrap_data_dir,
             set_bootstrap_data_dir,
             ensure_data_dir,

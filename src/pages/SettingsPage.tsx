@@ -3,13 +3,14 @@ import type { ReactNode } from 'react';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { readTextFile, writeTextFile } from '@tauri-apps/plugin-fs';
 import GlassModal from '../components/GlassModal';
-import { backupDatabase, deleteBackground, getDataDir, migrateDataDir, openDataDir, saveBackground, setBootstrapDataDir, toAssetUrl } from '../lib/api';
+import { backupDatabase, checkUpdate, deleteBackground, downloadCover, getDataDir, migrateDataDir, openDataDir, pathExists, saveBackground, setBootstrapDataDir, toAssetUrl } from '../lib/api';
+import { openExternal } from '../lib/api';
 import { CATEGORIES, CATEGORY_LABELS, STATUSES, STATUS_LABELS } from '../lib/constants';
-import { clearWorks, getSetting, insertWork, listWorks, reloadDatabase, setSetting } from '../lib/db';
+import { clearWorks, getSetting, insertWork, listWorks, reloadDatabase, setSetting, updateWork } from '../lib/db';
 import { normalizeTitle } from '../lib/importers';
 import { useSettings } from '../lib/settings';
 import type { AppSettings, Density, ProxyMode, SortKey, ThemeMode } from '../lib/settings';
-import type { Work } from '../types';
+import type { UpdateCheck, Work, WorkInput } from '../types';
 import pkg from '../../package.json';
 
 const SORT_LABELS: Record<SortKey, string> = {
@@ -65,6 +66,8 @@ export default function SettingsPage() {
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
+  const [updateInfo, setUpdateInfo] = useState<UpdateCheck | null>(null);
+  const [updating, setUpdating] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -131,6 +134,7 @@ export default function SettingsPage() {
           continue;
         }
         normalized.add(key);
+        const cover = await resolveImportCover(w);
         await insertWork({
           title: w.title.trim(),
           category: w.category ?? 'anime',
@@ -144,7 +148,8 @@ export default function SettingsPage() {
           synopsis: w.synopsis ?? '',
           tags: w.tags ?? '',
           notes: w.notes ?? '',
-          cover_path: w.cover_path ?? '',
+          cover_path: cover.path,
+          cover_url: cover.url,
           links: w.links ?? '',
           source: w.source ?? 'manual',
         });
@@ -157,6 +162,31 @@ export default function SettingsPage() {
     } finally {
       setBusy(false);
     }
+  };
+
+  /** 导入时的封面处理：本地路径失效或为空时，按设置决定使用在线 URL 或下载到本地。 */
+  const resolveImportCover = async (w: Work): Promise<{ path: string; url: string }> => {
+    const isRemote = (s: string) => /^https?:\/\//i.test(s);
+    const remote = w.cover_url && !isRemote(w.cover_url)
+      ? ''
+      : (w.cover_url || (w.cover_path && isRemote(w.cover_path) ? w.cover_path : ''));
+    const localPath = w.cover_path && !isRemote(w.cover_path) ? w.cover_path : '';
+    const localOk = localPath ? await pathExists(localPath) : false;
+
+    if (remote && !localOk) {
+      if (settings.downloadCovers) {
+        try {
+          return {
+            path: await downloadCover(remote, { proxyMode: settings.proxyMode, proxyUrl: settings.proxyUrl, dataDir: settings.dataDir }),
+            url: remote,
+          };
+        } catch {
+          return { path: remote, url: remote };
+        }
+      }
+      return { path: remote, url: remote };
+    }
+    return { path: w.cover_path ?? '', url: remote };
   };
 
   const doClear = async () => {
@@ -239,6 +269,73 @@ export default function SettingsPage() {
       setMessage(`恢复默认目录失败：${String(e)}`);
     } finally {
       setBusy(false);
+    }
+  };
+
+  const workToInput = (w: Work): WorkInput => ({
+    title: w.title,
+    category: w.category,
+    year: w.year,
+    season: w.season,
+    status: w.status,
+    total_count: w.total_count,
+    current_count: w.current_count,
+    rating: w.rating,
+    my_rating: w.my_rating,
+    synopsis: w.synopsis,
+    tags: w.tags,
+    notes: w.notes,
+    cover_path: w.cover_path,
+    cover_url: w.cover_url,
+    links: w.links,
+    source: w.source,
+  });
+
+  const repairCovers = async () => {
+    setBusy(true);
+    setMessage('');
+    try {
+      const works = await listWorks();
+      let fixed = 0;
+      for (const w of works) {
+        const isRemote = /^https?:\/\//i.test(w.cover_path);
+        const localOk = isRemote ? true : w.cover_path ? await pathExists(w.cover_path) : false;
+        const remote = w.cover_url || (isRemote ? w.cover_path : '');
+        if (!remote || (w.cover_path && localOk)) continue;
+        if (!settings.downloadCovers) {
+          if (w.cover_path !== remote) {
+            await updateWork(w.id, { ...workToInput(w), cover_path: remote });
+            fixed++;
+          }
+          continue;
+        }
+        try {
+          const local = await downloadCover(remote, { proxyMode: settings.proxyMode, proxyUrl: settings.proxyUrl, dataDir: settings.dataDir });
+          await updateWork(w.id, { ...workToInput(w), cover_path: local });
+          fixed++;
+        } catch {
+          // 单条失败跳过
+        }
+      }
+      setMessage(`封面修复完成：更新 ${fixed} 条`);
+    } catch (e) {
+      setMessage(`修复封面失败：${String(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const doCheckUpdate = async () => {
+    setUpdating(true);
+    setMessage('');
+    try {
+      const info = await checkUpdate(pkg.version, '');
+      setUpdateInfo(info);
+    } catch (e) {
+      setUpdateInfo(null);
+      setMessage(`检查更新失败：${String(e)}`);
+    } finally {
+      setUpdating(false);
     }
   };
 
@@ -430,6 +527,11 @@ export default function SettingsPage() {
               {busy ? '处理中…' : '导入 JSON'}
             </button>
           </SettingRow>
+          <SettingRow label="修复失效封面" desc="本地封面缺失时按在线 URL 重新下载（受「自动下载封面」开关控制）">
+            <button className="btn ghost" type="button" onClick={() => void repairCovers()} disabled={busy}>
+              {busy ? '处理中…' : '修复封面'}
+            </button>
+          </SettingRow>
           <SettingRow label="清空数据" desc="删除全部作品记录（不可恢复）">
             <button className="btn danger" type="button" onClick={() => setConfirmClear(true)} disabled={busy}>
               清空全部数据
@@ -441,6 +543,21 @@ export default function SettingsPage() {
           <h2>关于</h2>
           <SettingRow label="版本" desc="ACG 记录 - 个人 ACG 作品管理">
             <span className="setting-static">v{pkg.version}</span>
+          </SettingRow>
+          <SettingRow
+            label="检查更新"
+            desc={updateInfo ? (updateInfo.isNewer ? `发现新版本 ${updateInfo.latestVersion}` : updateInfo.latestVersion ? `已是最新版本（${updateInfo.latestVersion}）` : '未获取到版本信息') : '通过 GitHub Release 检查最新版本'}
+          >
+            <div className="setting-btns">
+              <button className="btn ghost" type="button" onClick={() => void doCheckUpdate()} disabled={updating}>
+                {updating ? '检查中…' : '检查'}
+              </button>
+              {updateInfo?.isNewer && updateInfo.htmlUrl && (
+                <button className="btn ghost" type="button" onClick={() => void openExternal(updateInfo.htmlUrl)}>
+                  打开下载页
+                </button>
+              )}
+            </div>
           </SettingRow>
           <SettingRow label="作品数量" desc="当前库中的作品总数">
             <span className="setting-static">{totalWorks} 部</span>
