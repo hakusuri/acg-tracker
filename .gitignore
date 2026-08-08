@@ -31,3 +31,6 @@ src-tauri/gen/schemas/
 outputs/
 # 本地应用数据（自定义数据目录测试产生，不入库）
 save_data/
+
+# 忽略架构说明
+架构说明.md
