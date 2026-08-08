@@ -87,7 +87,7 @@ export default function DetailPage() {
       <button className="btn ghost back-btn" onClick={() => navigate(-1)}>← 返回</button>
       <div className="detail-card glass">
         <div className="detail-cover">
-          <CoverImage src={work.cover_path} category={work.category} title={work.title} className="cover-img" />
+          <CoverImage src={work.cover_path} fallbackUrl={work.cover_url} category={work.category} title={work.title} className="cover-img" />
         </div>
         <div className="detail-main">
           <div className="detail-head">

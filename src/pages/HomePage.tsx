@@ -175,7 +175,7 @@ export default function HomePage() {
           {filtered.map((w) => (
             <button key={w.id} type="button" className="work-card glass" onClick={() => navigate(`/work/${w.id}`)}>
               <div className="work-cover">
-                <CoverImage src={w.cover_path} category={w.category} title={w.title} className="cover-img" />
+                <CoverImage src={w.cover_path} fallbackUrl={w.cover_url} category={w.category} title={w.title} className="cover-img" />
                 <span className="status-pill" style={{ background: STATUS_COLORS[w.status] }}>
                   {STATUS_LABELS[w.status]}
                 </span>
