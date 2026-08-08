@@ -31,7 +31,7 @@ npm run tauri build  # 打包 Windows 安装程序（NSIS）
 
 打包产物：
 
-- 安装程序：`src-tauri/target/release/bundle/nsis/ACG Tracker_0.1.0_x64-setup.exe`
+- 安装程序：`src-tauri/target/release/bundle/nsis/ACG Tracker_0.1.1_x64-setup.exe`
 - 便携版：`src-tauri/target/release/acg-tracker.exe`（需系统已安装 WebView2 运行时，Win10/11 一般自带）
 
 以上发布产物同时整理在项目根目录的 outputs/ 文件夹中。
