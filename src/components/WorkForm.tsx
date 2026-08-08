@@ -314,6 +314,18 @@ export default function WorkForm({ open, work, prefill, onClose, onSaved }: Prop
               {form.cover_path && (
                 <button className="btn ghost" type="button" onClick={() => void clearCover()}>清除</button>
               )}
+              {form.cover_path && !/^https?:\/\//i.test(form.cover_path) && (
+                <div className="cover-path-info">
+                  <span className="cover-path-label">本地缓存</span>
+                  <span className="cover-path-text" title={form.cover_path}>{form.cover_path}</span>
+                </div>
+              )}
+              {form.cover_url && form.cover_url !== form.cover_path && (
+                <div className="cover-path-info">
+                  <span className="cover-path-label">在线地址</span>
+                  <span className="cover-path-text" title={form.cover_url}>{form.cover_url}</span>
+                </div>
+              )}
             </div>
           </div>
         </div>
