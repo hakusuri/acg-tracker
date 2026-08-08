@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { readTextFile, writeTextFile } from '@tauri-apps/plugin-fs';
 import GlassModal from '../components/GlassModal';
-import { backupDatabase, getDataDir, migrateDataDir, openDataDir, saveBackground, setBootstrapDataDir, toAssetUrl } from '../lib/api';
+import { backupDatabase, deleteBackground, getDataDir, migrateDataDir, openDataDir, saveBackground, setBootstrapDataDir, toAssetUrl } from '../lib/api';
 import { CATEGORIES, CATEGORY_LABELS, STATUSES, STATUS_LABELS } from '../lib/constants';
 import { clearWorks, getSetting, insertWork, listWorks, reloadDatabase, setSetting } from '../lib/db';
 import { normalizeTitle } from '../lib/importers';
@@ -193,8 +193,18 @@ export default function SettingsPage() {
   };
 
   const clearBackground = async () => {
+    setBusy(true);
+    setMessage('');
+    try {
+      if (settings.backgroundImage) {
+        await deleteBackground(settings.backgroundImage, settings.dataDir);
+      }
+    } catch (e) {
+      console.error('删除背景文件失败', e);
+    }
     await update({ backgroundImage: '' });
-    setMessage('已清除背景图片');
+    setMessage('已清除背景图片（本地文件已删除）');
+    setBusy(false);
   };
 
   const pickDataDir = async () => {

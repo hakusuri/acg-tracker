@@ -396,6 +396,22 @@ fn save_background(app: tauri::AppHandle, source_path: String, data_dir: String)
     let bg_dir = base.join("backgrounds");
     std::fs::create_dir_all(&bg_dir).map_err(|e| format!("无法创建背景目录: {e}"))?;
 
+    // 内容去重：如果所选图片与已保存的背景相同，直接复用已有文件
+    if let Ok(src_bytes) = std::fs::read(&source_path) {
+        if let Ok(entries) = std::fs::read_dir(&bg_dir) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.is_file() {
+                    if let Ok(b) = std::fs::read(&p) {
+                        if b.len() == src_bytes.len() && b == src_bytes {
+                            return Ok(p.to_string_lossy().into_owned());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     let ext = std::path::Path::new(&source_path)
         .extension()
         .and_then(|e| e.to_str())
@@ -410,6 +426,30 @@ fn save_background(app: tauri::AppHandle, source_path: String, data_dir: String)
 
     std::fs::copy(&source_path, &dest).map_err(|e| format!("复制背景图片失败: {e}"))?;
     Ok(dest.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+fn delete_background(app: tauri::AppHandle, path: String, data_dir: String) -> Result<(), String> {
+    let base = resolve_data_dir(&app, &data_dir);
+    let bg_dir = base.join("backgrounds");
+    if !bg_dir.exists() {
+        return Ok(());
+    }
+    let target = std::path::PathBuf::from(&path);
+    if !target.exists() {
+        return Ok(());
+    }
+    let bg_canon = bg_dir
+        .canonicalize()
+        .map_err(|e| format!("解析背景目录失败: {e}"))?;
+    let target_canon = target
+        .canonicalize()
+        .map_err(|e| format!("解析背景文件失败: {e}"))?;
+    if !target_canon.starts_with(&bg_canon) {
+        return Err("只能删除背景目录内的文件".to_string());
+    }
+    std::fs::remove_file(&target_canon).map_err(|e| format!("删除背景图片失败: {e}"))?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -607,6 +647,7 @@ pub fn run() {
             download_cover,
             save_cover,
             save_background,
+            delete_background,
             get_data_dir,
             open_data_dir,
             backup_database,

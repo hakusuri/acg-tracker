@@ -151,9 +151,17 @@ export default function ImportPage() {
         proxyMode: settings.proxyMode,
         proxyUrl: settings.proxyUrl,
       };
-      const res = apiSource === 'bangumi' ? await searchBangumi(kw, bangumiTypes(apiCategory), cfg) : await searchVndb(kw, cfg);
-      setApiResults(res);
+      const res = apiSource === 'bangumi' ? await searchBangumi(kw, [], cfg) : await searchVndb(kw, cfg);
+      let shown = res;
+      if (apiSource === 'bangumi') {
+        const bgRes = res as BangumiItem[];
+        const allowed = bangumiTypes(apiCategory);
+        shown = apiCategory === 'all' ? bgRes : bgRes.filter((it) => allowed.includes(it.btype));
+      }
+      setApiResults(shown);
       if (res.length === 0) setApiError('没有找到相关结果，换个关键词试试');
+      else if (shown.length === 0) setApiError('该类别下没有匹配结果，试试切换类别');
+      else setApiError('');
     } catch (e) {
       setApiError(`搜索失败：${String(e)}`);
     } finally {
@@ -369,7 +377,7 @@ export default function ImportPage() {
         <div className="import-api">
           <div className="glass import-tip">
             <h3>API 搜索</h3>
-            <p><strong>Bangumi</strong>：按关键词搜索番剧/漫画等条目，自动带出简介、封面与链接，单次最多返回 {settings.searchLimit} 条。</p>
+            <p><strong>Bangumi</strong>：按关键词搜索全部类别，自动带出简介、封面与链接，单次最多返回 {settings.searchLimit} 条，可再按类别筛选结果。</p>
             <p><strong>VNDB</strong>：按关键词搜索 Galgame，自动带出简介、封面与 VNDB 链接，单次最多返回 {settings.searchLimit} 条。</p>
           </div>
           <div className="api-search-bar glass">
