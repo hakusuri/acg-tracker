@@ -26,7 +26,7 @@ const THEME_LABELS: Record<ThemeMode, string> = { auto: '跟随系统', light: '
 const DENSITY_LABELS: Record<Density, string> = { comfortable: '舒适', compact: '紧凑' };
 const PROXY_LABELS: Record<ProxyMode, string> = { auto: '跟随系统', direct: '直连', custom: '自定义' };
 
-function SettingRow({ label, desc, children }: { label: string; desc?: string; children: ReactNode }) {
+function SettingRow({ label, desc, children }: { label: string; desc?: string; children?: ReactNode }) {
   return (
     <div className="setting-row">
       <div className="setting-info">
@@ -62,7 +62,6 @@ function formatTime(iso: string | null): string {
 export default function SettingsPage() {
   const { settings, update } = useSettings();
   const [dataDir, setDataDir] = useState('');
-  const [totalWorks, setTotalWorks] = useState(0);
   const [lastBackup, setLastBackup] = useState<string | null>(null);
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
@@ -73,9 +72,8 @@ export default function SettingsPage() {
 
   const refresh = useCallback(async () => {
     try {
-      const [dir, works, lb] = await Promise.all([getDataDir(), listWorks(), getSetting('last_backup_at')]);
+      const [dir, lb] = await Promise.all([getDataDir(), getSetting('last_backup_at')]);
       setDataDir(dir);
-      setTotalWorks(works.length);
       setLastBackup(lb);
     } catch (e) {
       console.error('加载设置页信息失败', e);
@@ -176,7 +174,7 @@ export default function SettingsPage() {
     const localOk = localPath ? await pathExists(localPath) : false;
 
     if (remote && !localOk) {
-      if (settings.downloadCovers && settings.cacheCovers) {
+      if (settings.downloadCovers) {
         try {
           return {
             path: await downloadCover(remote, { proxyMode: settings.proxyMode, proxyUrl: settings.proxyUrl, dataDir: settings.dataDir }),
@@ -292,6 +290,33 @@ export default function SettingsPage() {
     links: w.links,
     source: w.source,
   });
+
+  const cacheCovers = async () => {
+    setBusy(true);
+    setMessage('');
+    try {
+      const works = await listWorks();
+      let cached = 0;
+      for (const w of works) {
+        const isRemote = /^https?:\/\//i.test(w.cover_path);
+        const localOk = isRemote ? true : w.cover_path ? await pathExists(w.cover_path) : false;
+        const remote = w.cover_url || (isRemote ? w.cover_path : '');
+        if (!remote || localOk) continue;
+        try {
+          const local = await downloadCover(remote, { proxyMode: settings.proxyMode, proxyUrl: settings.proxyUrl, dataDir: settings.dataDir });
+          await updateWork(w.id, { ...workToInput(w), cover_path: local });
+          cached++;
+        } catch {
+          // 单条失败跳过
+        }
+      }
+      setMessage(`封面缓存完成：缓存 ${cached} 条（缺少本地缓存的已按在线地址下载）`);
+    } catch (e) {
+      setMessage(`缓存封面失败：${String(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const clearCoverCache = async () => {
     setConfirmClearCache(false);
@@ -445,13 +470,7 @@ export default function SettingsPage() {
           <SettingRow label="自动下载封面" desc="API 导入时把封面保存到本地（更稳定）">
             <Toggle checked={settings.downloadCovers} onChange={(v) => patch('downloadCovers', v)} />
           </SettingRow>
-          <SettingRow label="缓存封面文件" desc="关闭后导入只保存在线地址、不写入本地文件；需先开启自动下载封面">
-            <Toggle
-              checked={settings.cacheCovers}
-              onChange={(v) => patch('cacheCovers', v)}
-              disabled={!settings.downloadCovers}
-            />
-          </SettingRow>
+
         </section>
 
         <section className="glass settings-section">
@@ -529,6 +548,11 @@ export default function SettingsPage() {
               {busy ? '处理中…' : '导入 JSON'}
             </button>
           </SettingRow>
+          <SettingRow label="缓存封面文件" desc="扫描缺少本地缓存的作品，按在线地址下载到本地（需先开启自动下载封面）">
+            <button className="btn ghost" type="button" onClick={() => void cacheCovers()} disabled={busy || !settings.downloadCovers}>
+              {busy ? '处理中…' : '缓存封面'}
+            </button>
+          </SettingRow>
           <SettingRow label="清除本地封面缓存" desc="删除全部作品的本地封面文件并清空路径，保留在线地址（封面仍可正常显示）">
             <button className="btn ghost" type="button" onClick={() => setConfirmClearCache(true)} disabled={busy}>
               清除缓存
@@ -561,12 +585,8 @@ export default function SettingsPage() {
               )}
             </div>
           </SettingRow>
-          <SettingRow label="作品数量" desc="当前库中的作品总数">
-            <span className="setting-static">{totalWorks} 部</span>
-          </SettingRow>
-          <SettingRow label="技术栈" desc="Tauri 2 · React 18 · TypeScript · SQLite">
-            <span className="setting-static">本地单机</span>
-          </SettingRow>
+
+          <SettingRow label="技术栈" desc="Tauri 2 · React 18 · TypeScript · SQLite" />
         </section>
       </div>
 
