@@ -177,7 +177,7 @@ export default function WorkForm({ open, work, prefill, onClose, onSaved }: Prop
         title,
         season: form.category === 'anime' ? form.season : null,
         tags: form.tags.trim(),
-        cover_url: form.cover_url ?? '',
+        cover_url: form.cover_url || (/^https?:\/\//i.test(form.cover_path) ? form.cover_path : ''),
         links: JSON.stringify(parseLinks(form.links)),
       };
       let id = work?.id ?? 0;
