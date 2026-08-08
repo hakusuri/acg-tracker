@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { allowAssetDir } from './api';
 import { getSetting, setSetting } from './db';
 import type { Category, Status } from '../types';
 
@@ -179,6 +180,14 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     root.setAttribute('data-theme', settings.theme);
     root.setAttribute('data-density', settings.density);
   }, [settings.theme, settings.density]);
+
+  useEffect(() => {
+    if (settings.dataDir) {
+      void allowAssetDir(settings.dataDir).catch(() => {
+        // 白名单添加失败不阻塞使用
+      });
+    }
+  }, [settings.dataDir]);
 
   return <SettingsContext.Provider value={{ settings, loaded, update }}>{children}</SettingsContext.Provider>;
 }

@@ -51,6 +51,7 @@ export const getDataDir = () => invoke<string>('get_data_dir');
 export const openDataDir = (dataDir: string) => invoke<void>('open_data_dir', { dataDir });
 export const backupDatabase = (keep: number, dataDir: string) => invoke<string>('backup_database', { keep, dataDir });
 
+export const allowAssetDir = (dir: string) => invoke<void>('allow_asset_dir', { dir });
 export const getBootstrapDataDir = () => invoke<string>('get_bootstrap_data_dir');
 export const setBootstrapDataDir = (path: string) => invoke<void>('set_bootstrap_data_dir', { path });
 export const ensureDataDir = (dir: string) => invoke<void>('ensure_data_dir', { dir });

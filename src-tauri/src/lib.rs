@@ -532,6 +532,15 @@ fn set_bootstrap_data_dir(app: tauri::AppHandle, path: String) -> Result<(), Str
 }
 
 #[tauri::command]
+fn allow_asset_dir(app: tauri::AppHandle, dir: String) -> Result<(), String> {
+    let d = resolve_data_dir(&app, &dir);
+    app.asset_protocol_scope()
+        .allow_directory(&d, true)
+        .map_err(|e| format!("添加资源目录到白名单失败: {e}"))?;
+    Ok(())
+}
+
+#[tauri::command]
 fn ensure_data_dir(app: tauri::AppHandle, dir: String) -> Result<(), String> {
     let d = resolve_data_dir(&app, &dir);
     std::fs::create_dir_all(&d).map_err(|e| format!("创建目录失败: {e}"))?;
@@ -601,6 +610,7 @@ pub fn run() {
             get_data_dir,
             open_data_dir,
             backup_database,
+            allow_asset_dir,
             get_bootstrap_data_dir,
             set_bootstrap_data_dir,
             ensure_data_dir,
