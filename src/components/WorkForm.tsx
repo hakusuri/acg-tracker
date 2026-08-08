@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import type { ChangeEvent } from 'react';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import GlassModal from './GlassModal';
-import { saveCover, toAssetUrl } from '../lib/api';
+import { deleteCoverFile, saveCover, toAssetUrl } from '../lib/api';
 import { CATEGORIES, CATEGORY_LABELS, SEASONS, SEASON_LABELS, STATUSES, STATUS_LABELS } from '../lib/constants';
 import { insertWork, updateWork } from '../lib/db';
 import { useSettings } from '../lib/settings';
@@ -142,6 +142,19 @@ export default function WorkForm({ open, work, prefill, onClose, onSaved }: Prop
     const v = e.target.value;
     const n = v === '' ? null : Math.min(10, Math.max(0, parseFloat(v)));
     set(key, Number.isNaN(n as number) ? null : n);
+  };
+
+  const clearCover = async () => {
+    const path = form.cover_path;
+    set('cover_path', '');
+    // 本地缓存封面：同步删除文件（在线地址 cover_url 保留）
+    if (path && !/^https?:\/\//i.test(path)) {
+      try {
+        await deleteCoverFile(path, settings.dataDir);
+      } catch {
+        // 删除失败不阻塞清除
+      }
+    }
   };
 
   const pickCover = async () => {
@@ -299,7 +312,7 @@ export default function WorkForm({ open, work, prefill, onClose, onSaved }: Prop
                 placeholder="或粘贴图片 URL"
               />
               {form.cover_path && (
-                <button className="btn ghost" type="button" onClick={() => set('cover_path', '')}>清除</button>
+                <button className="btn ghost" type="button" onClick={() => void clearCover()}>清除</button>
               )}
             </div>
           </div>
