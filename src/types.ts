@@ -73,6 +73,13 @@ export interface VndbItem {
   tags: string[];
 }
 
+export interface BackupInfo {
+  name: string;
+  path: string;
+  size: number;
+  modified: string;
+}
+
 export interface UpdateCheck {
   latestVersion: string;
   htmlUrl: string;

@@ -3,14 +3,14 @@ import type { ReactNode } from 'react';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { readTextFile, writeTextFile } from '@tauri-apps/plugin-fs';
 import GlassModal from '../components/GlassModal';
-import { backupDatabase, checkUpdate, deleteBackground, deleteCoverFile, downloadCover, getDataDir, migrateDataDir, openDataDir, pathExists, saveBackground, setBootstrapDataDir, toAssetUrl } from '../lib/api';
+import { backupDatabase, checkUpdate, deleteAllCovers, deleteBackground, deleteCoverFile, downloadCover, getDataDir, listBackups, migrateDataDir, openDataDir, pathExists, restoreBackup, saveBackground, setBootstrapDataDir, toAssetUrl } from '../lib/api';
 import { openExternal } from '../lib/api';
 import { CATEGORIES, CATEGORY_LABELS, STATUSES, STATUS_LABELS } from '../lib/constants';
-import { clearWorks, getSetting, insertWork, listWorks, reloadDatabase, setSetting, updateWork } from '../lib/db';
+import { clearWorks, closeDatabase, getSetting, insertWork, listWorks, reloadDatabase, setSetting, updateWork } from '../lib/db';
 import { normalizeTitle } from '../lib/importers';
 import { useSettings } from '../lib/settings';
 import type { AppSettings, Density, ProxyMode, SortKey, ThemeMode } from '../lib/settings';
-import type { UpdateCheck, Work, WorkInput } from '../types';
+import type { BackupInfo, UpdateCheck, Work, WorkInput } from '../types';
 import pkg from '../../package.json';
 
 const SORT_LABELS: Record<SortKey, string> = {
@@ -52,6 +52,12 @@ function Toggle({ checked, onChange, disabled }: { checked: boolean; onChange: (
   );
 }
 
+function formatBytes(size: number): string {
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / 1024 / 1024).toFixed(1)} MB`;
+}
+
 function formatTime(iso: string | null): string {
   if (!iso) return '尚未备份';
   const d = new Date(iso);
@@ -69,12 +75,18 @@ export default function SettingsPage() {
   const [updateInfo, setUpdateInfo] = useState<UpdateCheck | null>(null);
   const [updating, setUpdating] = useState(false);
   const [confirmClearCache, setConfirmClearCache] = useState(false);
+  const [backups, setBackups] = useState<BackupInfo[]>([]);
+  const [selectedBackup, setSelectedBackup] = useState('');
+  const [confirmRestore, setConfirmRestore] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
       const [dir, lb] = await Promise.all([getDataDir(), getSetting('last_backup_at')]);
       setDataDir(dir);
       setLastBackup(lb);
+      const bs = await listBackups(settings.dataDir);
+      setBackups(bs);
+      setSelectedBackup((cur) => cur || bs[0]?.path || '');
     } catch (e) {
       console.error('加载设置页信息失败', e);
     }
@@ -194,7 +206,13 @@ export default function SettingsPage() {
     setBusy(true);
     try {
       await clearWorks();
-      setMessage('已清空全部作品数据');
+      let coverCount = 0;
+      try {
+        coverCount = await deleteAllCovers(settings.dataDir);
+      } catch {
+        // 封面删除失败不阻塞
+      }
+      setMessage(`已清空全部作品数据（含 ${coverCount} 个本地封面缓存）`);
       await refresh();
     } catch (e) {
       setMessage(`清空失败：${String(e)}`);
@@ -356,6 +374,28 @@ export default function SettingsPage() {
       setMessage(`检查更新失败：${String(e)}`);
     } finally {
       setUpdating(false);
+    }
+  };
+
+  const doRestore = async () => {
+    setConfirmRestore(false);
+    setBusy(true);
+    setMessage('');
+    try {
+      await closeDatabase();
+      await restoreBackup(selectedBackup, settings.dataDir);
+      await reloadDatabase();
+      await refresh();
+      setMessage('数据库已从备份恢复');
+    } catch (e) {
+      setMessage(`恢复失败：${String(e)}`);
+      try {
+        await reloadDatabase();
+      } catch {
+        // 恢复失败后尽力重连
+      }
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -538,6 +578,29 @@ export default function SettingsPage() {
               </button>
             </div>
           </SettingRow>
+          <SettingRow label="从备份恢复" desc="选择一份数据库备份覆盖当前数据（作品与设置）">
+            <div className="setting-btns">
+              <select
+                className="select select-sm"
+                value={selectedBackup}
+                onChange={(e) => setSelectedBackup(e.target.value)}
+                disabled={busy || backups.length === 0}
+              >
+                {backups.length === 0 ? (
+                  <option value="">暂无备份</option>
+                ) : (
+                  backups.map((b) => (
+                    <option key={b.path} value={b.path}>
+                      {b.name}（{formatBytes(b.size)}）
+                    </option>
+                  ))
+                )}
+              </select>
+              <button className="btn ghost" type="button" onClick={() => setConfirmRestore(true)} disabled={busy || !selectedBackup}>
+                恢复
+              </button>
+            </div>
+          </SettingRow>
           <SettingRow label="导出数据" desc="将全部作品导出为 JSON 备份文件">
             <button className="btn ghost" type="button" onClick={() => void exportData()} disabled={busy}>
               {busy ? '处理中…' : '导出 JSON'}
@@ -589,6 +652,14 @@ export default function SettingsPage() {
           <SettingRow label="技术栈" desc="Tauri 2 · React 18 · TypeScript · SQLite" />
         </section>
       </div>
+
+      <GlassModal open={confirmRestore} onClose={() => setConfirmRestore(false)} title="恢复数据库备份">
+        <p className="confirm-text">将用所选备份覆盖当前全部数据（作品与设置），当前数据不可找回。确定继续吗？</p>
+        <div className="modal-foot">
+          <button className="btn ghost" type="button" onClick={() => setConfirmRestore(false)}>取消</button>
+          <button className="btn danger" type="button" onClick={() => void doRestore()}>确认恢复</button>
+        </div>
+      </GlassModal>
 
       <GlassModal open={confirmClearCache} onClose={() => setConfirmClearCache(false)} title="清除本地封面缓存">
         <p className="confirm-text">将删除全部作品的本地封面文件并清空本地路径；在线地址会保留，封面仍可正常显示（需联网）。确定继续吗？</p>

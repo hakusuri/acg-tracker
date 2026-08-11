@@ -1,6 +1,6 @@
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { openUrl } from '@tauri-apps/plugin-opener';
-import type { BangumiItem, UpdateCheck, VndbItem } from '../types';
+import type { BackupInfo, BangumiItem, UpdateCheck, VndbItem } from '../types';
 
 export interface ApiRequestConfig {
   limit: number;
@@ -52,6 +52,9 @@ export const saveCover = (sourcePath: string, dataDir: string) =>
 export const getDataDir = () => invoke<string>('get_data_dir');
 export const openDataDir = (dataDir: string) => invoke<void>('open_data_dir', { dataDir });
 export const backupDatabase = (keep: number, dataDir: string) => invoke<string>('backup_database', { keep, dataDir });
+export const listBackups = (dataDir: string) => invoke<BackupInfo[]>('list_backups', { dataDir });
+export const restoreBackup = (backupPath: string, dataDir: string) => invoke<void>('restore_backup', { backupPath, dataDir });
+export const deleteAllCovers = (dataDir: string) => invoke<number>('delete_all_covers', { dataDir });
 
 export const allowAssetDir = (dir: string) => invoke<void>('allow_asset_dir', { dir });
 export const migrateLegacyData = () => invoke<void>('migrate_legacy_data');

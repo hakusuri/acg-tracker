@@ -81,6 +81,18 @@ export async function getDb(): Promise<Database> {
   return db;
 }
 
+/** 关闭当前数据库连接（文件操作前使用，例如恢复备份）。 */
+export async function closeDatabase(): Promise<void> {
+  if (db) {
+    try {
+      await db.close();
+    } catch {
+      // 关闭失败不阻塞
+    }
+    db = null;
+  }
+}
+
 /** 数据目录变化后重载数据库连接（旧连接先关闭）。 */
 export async function reloadDatabase(): Promise<void> {
   if (db) {

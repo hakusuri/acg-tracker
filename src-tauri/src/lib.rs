@@ -445,6 +445,98 @@ fn save_background(app: tauri::AppHandle, source_path: String, data_dir: String)
     Ok(dest.to_string_lossy().into_owned())
 }
 
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupInfo {
+    pub name: String,
+    pub path: String,
+    pub size: u64,
+    pub modified: String,
+}
+
+#[tauri::command]
+fn list_backups(app: tauri::AppHandle, data_dir: String) -> Result<Vec<BackupInfo>, String> {
+    let base = resolve_data_dir(&app, &data_dir);
+    let backups_dir = base.join("backups");
+    if !backups_dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut out = Vec::new();
+    for entry in std::fs::read_dir(&backups_dir).map_err(|e| e.to_string())? {
+        let Ok(e) = entry else { continue };
+        let p = e.path();
+        if p.extension().and_then(|x| x.to_str()) != Some("db") {
+            continue;
+        }
+        let is_backup = p
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(|n| n.starts_with("acg_"))
+            .unwrap_or(false);
+        if !is_backup {
+            continue;
+        }
+        let meta = e.metadata().map_err(|e| e.to_string())?;
+        let modified = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs().to_string())
+            .unwrap_or_default();
+        out.push(BackupInfo {
+            name: e.file_name().to_string_lossy().into_owned(),
+            path: p.to_string_lossy().into_owned(),
+            size: meta.len(),
+            modified,
+        });
+    }
+    out.sort_by(|a, b| b.modified.cmp(&a.modified));
+    Ok(out)
+}
+
+#[tauri::command]
+fn restore_backup(app: tauri::AppHandle, backup_path: String, data_dir: String) -> Result<(), String> {
+    let base = resolve_data_dir(&app, &data_dir);
+    let backups_dir = base.join("backups");
+    let target = std::path::PathBuf::from(&backup_path);
+    if !target.exists() {
+        return Err("备份文件不存在".to_string());
+    }
+    let b = backups_dir.canonicalize().map_err(|e| e.to_string())?;
+    let t = target.canonicalize().map_err(|e| e.to_string())?;
+    if !t.starts_with(&b) {
+        return Err("只能恢复备份目录内的文件".to_string());
+    }
+    let db_path = base.join("acg.db");
+    for suffix in ["", "-wal", "-shm"] {
+        let p = std::path::PathBuf::from(format!("{}{}", db_path.to_string_lossy(), suffix));
+        if p.exists() {
+            let _ = std::fs::remove_file(&p);
+        }
+    }
+    std::fs::copy(&target, &db_path).map_err(|e| format!("恢复数据库失败: {e}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+fn delete_all_covers(app: tauri::AppHandle, data_dir: String) -> Result<u32, String> {
+    let base = resolve_data_dir(&app, &data_dir);
+    let covers_dir = base.join("covers");
+    if !covers_dir.exists() {
+        return Ok(0);
+    }
+    let mut count = 0;
+    for entry in std::fs::read_dir(&covers_dir).map_err(|e| e.to_string())? {
+        if let Ok(e) = entry {
+            if e.path().is_file() {
+                let _ = std::fs::remove_file(e.path());
+                count += 1;
+            }
+        }
+    }
+    Ok(count)
+}
+
 #[tauri::command]
 fn delete_cover_file(app: tauri::AppHandle, path: String, data_dir: String) -> Result<(), String> {
     let base = resolve_data_dir(&app, &data_dir);
@@ -798,6 +890,9 @@ pub fn run() {
             backup_database,
             allow_asset_dir,
             migrate_legacy_data,
+            list_backups,
+            restore_backup,
+            delete_all_covers,
             path_exists,
             check_update,
             get_bootstrap_data_dir,
