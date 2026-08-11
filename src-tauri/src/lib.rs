@@ -182,13 +182,19 @@ async fn check_status(resp: reqwest::Response, service: &str) -> Result<reqwest:
 
 /// Bangumi 搜索结果的 image 可能是字符串 URL，也可能是 { large, common, ... } 对象。
 fn extract_bangumi_image(it: &serde_json::Value) -> Option<String> {
-    let img = it.get("image")?;
-    if let Some(s) = img.as_str() {
-        return Some(s.to_string());
+    for key in ["image", "images"] {
+        if let Some(img) = it.get(key) {
+            if let Some(s) = img.as_str() {
+                return Some(s.to_string());
+            }
+            for size in ["large", "medium", "common", "small"] {
+                if let Some(s) = img.get(size).and_then(|v| v.as_str()) {
+                    return Some(s.to_string());
+                }
+            }
+        }
     }
-    img.get("large")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
+    None
 }
 
 #[tauri::command]
@@ -946,7 +952,11 @@ async fn fetch_bangumi_calendar(
                     id: it.get("id").and_then(|v| v.as_i64()).unwrap_or(0),
                     name: it.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
                     name_cn: it.get("name_cn").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                    date: it.get("date").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                    date: it
+                        .get("date")
+                        .or_else(|| it.get("air_date"))
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
                     image: extract_bangumi_image(it),
                     score,
                     eps: it
@@ -1048,6 +1058,83 @@ fn launch_game(path: String) -> Result<(), String> {
     Ok(())
 }
 
+fn calendar_cache_dir(app: &tauri::AppHandle, data_dir: &str) -> std::path::PathBuf {
+    resolve_data_dir(app, data_dir).join("calendar_cache")
+}
+
+#[tauri::command]
+fn read_calendar_cache(app: tauri::AppHandle, data_dir: String) -> Result<Option<String>, String> {
+    let file = calendar_cache_dir(&app, &data_dir).join("calendar.json");
+    if !file.exists() {
+        return Ok(None);
+    }
+    std::fs::read_to_string(&file)
+        .map(Some)
+        .map_err(|e| format!("读取日历缓存失败: {e}"))
+}
+
+#[tauri::command]
+fn write_calendar_cache(app: tauri::AppHandle, data_dir: String, json: String) -> Result<(), String> {
+    let dir = calendar_cache_dir(&app, &data_dir);
+    std::fs::create_dir_all(&dir).map_err(|e| format!("无法创建日历缓存目录: {e}"))?;
+    std::fs::write(dir.join("calendar.json"), json).map_err(|e| format!("写入日历缓存失败: {e}"))
+}
+
+#[tauri::command]
+fn delete_calendar_cache(app: tauri::AppHandle, data_dir: String) -> Result<(), String> {
+    let dir = calendar_cache_dir(&app, &data_dir);
+    if dir.exists() {
+        std::fs::remove_dir_all(&dir).map_err(|e| format!("删除日历缓存失败: {e}"))?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn download_calendar_cover(
+    app: tauri::AppHandle,
+    url: String,
+    data_dir: String,
+    proxy_mode: String,
+    proxy_url: String,
+) -> Result<String, String> {
+    let covers_dir = calendar_cache_dir(&app, &data_dir).join("covers");
+    std::fs::create_dir_all(&covers_dir).map_err(|e| format!("无法创建日历封面目录: {e}"))?;
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    std::hash::Hasher::write(&mut hasher, url.as_bytes());
+    let hash = std::hash::Hasher::finish(&hasher);
+
+    let parsed = reqwest::Url::parse(&url).map_err(|e| e.to_string())?;
+    let ext = parsed
+        .path_segments()
+        .and_then(|mut segs| segs.next_back())
+        .and_then(|name| name.rfind('.').map(|i| &name[i + 1..]))
+        .map(|e| e.to_lowercase())
+        .filter(|e| matches!(e.as_str(), "jpg" | "jpeg" | "png" | "webp" | "gif" | "avif" | "bmp"))
+        .unwrap_or_else(|| "jpg".to_string());
+    let dest = covers_dir.join(format!("cal_{hash:x}.{ext}"));
+    if dest.exists() {
+        return Ok(dest.to_string_lossy().into_owned());
+    }
+
+    let resp = send_with_fallback(
+        |client| client.get(url.clone()).header("User-Agent", UA_BANGUMI),
+        &proxy_mode,
+        &proxy_url,
+    )
+    .await?;
+    let resp = check_status(resp, "日历封面下载").await?;
+    let bytes = resp
+        .bytes()
+        .await
+        .map_err(|e| format!("下载日历封面失败: {e}"))?;
+    if bytes.len() > 15 * 1024 * 1024 {
+        return Err("封面文件过大".to_string());
+    }
+    std::fs::write(&dest, &bytes).map_err(|e| format!("保存日历封面失败: {e}"))?;
+    Ok(dest.to_string_lossy().into_owned())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1059,6 +1146,10 @@ pub fn run() {
             fetch_bangumi_calendar,
             fetch_bangumi_subject,
             launch_game,
+            read_calendar_cache,
+            write_calendar_cache,
+            delete_calendar_cache,
+            download_calendar_cover,
             search_bangumi,
             search_vndb,
             download_cover,

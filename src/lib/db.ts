@@ -4,6 +4,7 @@ import { CATEGORY_LABELS, STATUS_LABELS } from './constants';
 import type { ActivityEntry, PlaySession, Work, WorkInput } from '../types';
 
 let db: Database | null = null;
+let dbPromise: Promise<Database> | null = null;
 
 const MIGRATIONS = `
 CREATE TABLE IF NOT EXISTS works (
@@ -113,11 +114,22 @@ async function openDatabase(): Promise<Database> {
   return d;
 }
 
-export async function getDb(): Promise<Database> {
-  if (!db) {
-    db = await openDatabase();
+/** 获取共享数据库连接；并发调用时复用同一个初始化 Promise，避免重复迁移/多连接锁死。 */
+export function getDb(): Promise<Database> {
+  if (db) return Promise.resolve(db);
+  if (!dbPromise) {
+    dbPromise = openDatabase()
+      .then((d) => {
+        db = d;
+        dbPromise = null;
+        return d;
+      })
+      .catch((e) => {
+        dbPromise = null;
+        throw e;
+      });
   }
-  return db;
+  return dbPromise;
 }
 
 /** 关闭当前数据库连接（文件操作前使用，例如恢复备份）。 */
@@ -129,6 +141,7 @@ export async function closeDatabase(): Promise<void> {
       // 关闭失败不阻塞
     }
     db = null;
+    dbPromise = null;
   }
 }
 
@@ -142,6 +155,7 @@ export async function reloadDatabase(): Promise<void> {
     }
     db = null;
   }
+  dbPromise = null;
   db = await openDatabase();
 }
 

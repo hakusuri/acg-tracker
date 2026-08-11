@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { readTextFile, writeTextFile } from '@tauri-apps/plugin-fs';
 import GlassModal from '../components/GlassModal';
-import { backupDatabase, checkUpdate, deleteAllCovers, deleteBackground, deleteCoverFile, downloadCover, getDataDir, listBackups, migrateDataDir, openDataDir, pathExists, restoreBackup, saveBackground, setBootstrapDataDir, toAssetUrl } from '../lib/api';
+import { backupDatabase, checkUpdate, deleteAllCovers, deleteBackground, deleteCalendarCache, deleteCoverFile, downloadCover, getDataDir, listBackups, migrateDataDir, openDataDir, pathExists, restoreBackup, saveBackground, setBootstrapDataDir, toAssetUrl } from '../lib/api';
 import { openExternal } from '../lib/api';
 import { CATEGORIES, CATEGORY_LABELS, STATUSES, STATUS_LABELS } from '../lib/constants';
 import { clearWorks, closeDatabase, getSetting, insertWork, listWorks, reloadDatabase, setSetting, updateWork, workToInput } from '../lib/db';
@@ -265,7 +265,12 @@ export default function SettingsPage() {
       } catch {
         // 封面删除失败不阻塞
       }
-      setMessage(`已清空全部作品数据（含 ${coverCount} 个本地封面缓存）`);
+      try {
+        await deleteCalendarCache(settings.dataDir);
+      } catch {
+        // 日历缓存删除失败不阻塞
+      }
+      setMessage(`已清空全部作品数据（含 ${coverCount} 个本地封面缓存与日历缓存）`);
       await refresh();
     } catch (e) {
       setMessage(`清空失败：${String(e)}`);
@@ -388,7 +393,12 @@ export default function SettingsPage() {
         await updateWork(w.id, { ...workToInput(w), cover_path: '' });
         cleared++;
       }
-      setMessage(`已清除 ${cleared} 条作品的本地封面缓存（在线地址已保留）`);
+      try {
+        await deleteCalendarCache(settings.dataDir);
+      } catch {
+        // 日历缓存删除失败不阻塞
+      }
+      setMessage(`已清除 ${cleared} 条作品的本地封面缓存与日历缓存（在线地址已保留）`);
       await refresh();
     } catch (e) {
       setMessage(`清除封面缓存失败：${String(e)}`);
@@ -662,7 +672,7 @@ export default function SettingsPage() {
               {busy ? '处理中…' : '缓存封面'}
             </button>
           </SettingRow>
-          <SettingRow label="清除本地封面缓存" desc="删除全部作品的本地封面文件并清空路径，保留在线地址（封面仍可正常显示）">
+          <SettingRow label="清除本地缓存" desc="删除全部作品的本地封面缓存与日历本地缓存，保留在线地址（封面仍可正常显示）">
             <button className="btn ghost" type="button" onClick={() => setConfirmClearCache(true)} disabled={busy}>
               清除缓存
             </button>
@@ -707,8 +717,8 @@ export default function SettingsPage() {
         </div>
       </GlassModal>
 
-      <GlassModal open={confirmClearCache} onClose={() => setConfirmClearCache(false)} title="清除本地封面缓存">
-        <p className="confirm-text">将删除全部作品的本地封面文件并清空本地路径；在线地址会保留，封面仍可正常显示（需联网）。确定继续吗？</p>
+      <GlassModal open={confirmClearCache} onClose={() => setConfirmClearCache(false)} title="清除本地缓存">
+        <p className="confirm-text">将删除全部作品的本地封面文件、清空本地路径，并同时删除日历本地缓存；在线地址会保留，封面仍可正常显示（需联网）。确定继续吗？</p>
         <div className="modal-foot">
           <button className="btn ghost" type="button" onClick={() => setConfirmClearCache(false)}>取消</button>
           <button className="btn danger" type="button" onClick={() => void clearCoverCache()}>确认清除</button>

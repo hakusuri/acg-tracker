@@ -98,6 +98,12 @@ export interface CalendarItem {
   score: number | null;
   eps: number | null;
   btype: number;
+  coverPath?: string;
+}
+
+export interface CalendarCacheData {
+  fetchedAt: string;
+  days: CalendarDay[];
 }
 
 export interface CalendarDay {

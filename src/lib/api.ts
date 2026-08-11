@@ -51,6 +51,17 @@ export const fetchBangumiSubject = (subjectId: number, cfg: { apiBase: string; p
 
 export const launchGame = (path: string) => invoke<void>('launch_game', { path });
 
+export const readCalendarCache = (dataDir: string) => invoke<string | null>('read_calendar_cache', { dataDir });
+export const writeCalendarCache = (dataDir: string, json: string) => invoke<void>('write_calendar_cache', { dataDir, json });
+export const deleteCalendarCache = (dataDir: string) => invoke<void>('delete_calendar_cache', { dataDir });
+export const downloadCalendarCover = (url: string, cfg: CoverDownloadConfig) =>
+  invoke<string>('download_calendar_cover', {
+    url,
+    dataDir: cfg.dataDir,
+    proxyMode: cfg.proxyMode,
+    proxyUrl: cfg.proxyUrl,
+  });
+
 export const downloadCover = (url: string, cfg: CoverDownloadConfig) =>
   invoke<string>('download_cover', {
     url,
