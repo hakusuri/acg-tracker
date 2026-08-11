@@ -244,7 +244,10 @@ export default function WorkForm({ open, work, prefill, onClose, onSaved }: Prop
 
   const isAnime = form.category === 'anime';
   const isGalgame = form.category === 'galgame';
-  const coverUrl = form.cover_path && !/^https?:\/\//i.test(form.cover_path ?? '') ? toAssetUrl(form.cover_path) : form.cover_path;
+  const coverUrl =
+    form.cover_path && !/^https?:\/\//i.test(form.cover_path ?? '')
+      ? toAssetUrl(form.cover_path)
+      : (form.cover_path || (/^https?:\/\//i.test(form.cover_url ?? '') ? form.cover_url ?? '' : ''));
   const progressHint: Record<string, string> = {
     anime: '已看集数 / 总集数',
     manga: '已读卷数 / 总卷数',
@@ -377,7 +380,13 @@ export default function WorkForm({ open, work, prefill, onClose, onSaved }: Prop
               </button>
               <input
                 className="input"
-                value={/^https?:\/\//i.test(form.cover_path ?? '') ? form.cover_path : ''}
+                value={
+                  /^https?:\/\//i.test(form.cover_path ?? '')
+                    ? form.cover_path ?? ''
+                    : /^https?:\/\//i.test(form.cover_url ?? '')
+                      ? form.cover_url ?? ''
+                      : ''
+                }
                 onChange={(e) => {
                   const v = e.target.value.trim();
                   set('cover_path', v);

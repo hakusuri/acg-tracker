@@ -37,7 +37,7 @@ export function mapBangumiPrefill(item: BangumiItem, forceCategory?: ApiCategory
     year,
     season: category === 'anime' ? seasonFromDate(item.date ?? '') : null,
     synopsis: item.summary,
-    cover_path: item.image ?? '',
+    cover_path: '',
     cover_url: item.image ?? '',
     rating: item.score,
     total_count: totalCount && totalCount > 0 ? totalCount : null,
@@ -51,11 +51,13 @@ export function mapBangumiPrefill(item: BangumiItem, forceCategory?: ApiCategory
 
 export async function buildBangumiPrefill(item: BangumiItem, opts: PrefillBuildOpts): Promise<WorkFormPrefill> {
   const prefill = mapBangumiPrefill(item, opts.forceCategory);
-  if (prefill.cover_path && opts.downloadCovers) {
+  const remote = item.image ?? '';
+  // 在线地址始终保存在 cover_url；仅勾选自动下载封面时才把本地路径填入 cover_path
+  if (remote && opts.downloadCovers) {
     try {
-      prefill.cover_path = await opts.download(prefill.cover_path);
+      prefill.cover_path = await opts.download(remote);
     } catch {
-      // 下载失败时保留远程地址
+      // 下载失败时保留在线地址
     }
   }
   return prefill;
@@ -70,7 +72,7 @@ export function mapVndbPrefill(item: VndbItem): WorkFormPrefill {
     year,
     season: null,
     synopsis: item.description ?? '',
-    cover_path: item.image ?? '',
+    cover_path: '',
     cover_url: item.image ?? '',
     rating: item.rating != null ? Math.round((item.rating / 10) * 10) / 10 : null,
     tags: item.tags.slice(0, 8).join(','),
@@ -82,11 +84,12 @@ export function mapVndbPrefill(item: VndbItem): WorkFormPrefill {
 
 export async function buildVndbPrefill(item: VndbItem, opts: PrefillBuildOpts): Promise<WorkFormPrefill> {
   const prefill = mapVndbPrefill(item);
-  if (prefill.cover_path && opts.downloadCovers) {
+  const remote = item.image ?? '';
+  if (remote && opts.downloadCovers) {
     try {
-      prefill.cover_path = await opts.download(prefill.cover_path);
+      prefill.cover_path = await opts.download(remote);
     } catch {
-      // 下载失败时保留远程地址
+      // 下载失败时保留在线地址
     }
   }
   return prefill;

@@ -246,10 +246,10 @@ export default function SettingsPage() {
             url: remote,
           };
         } catch {
-          return { path: remote, url: remote };
+          return { path: '', url: remote };
         }
       }
-      return { path: remote, url: remote };
+      return { path: '', url: remote };
     }
     return { path: w.cover_path ?? '', url: remote };
   };
@@ -355,9 +355,11 @@ export default function SettingsPage() {
       const works = await listWorks();
       let cached = 0;
       for (const w of works) {
-        const isRemote = /^https?:\/\//i.test(w.cover_path);
-        const localOk = isRemote ? true : w.cover_path ? await pathExists(w.cover_path) : false;
-        const remote = w.cover_url || (isRemote ? w.cover_path : '');
+        const isRemote = /^https?:\/\//i.test(w.cover_path ?? '');
+        const localPath = !isRemote ? (w.cover_path ?? '') : '';
+        const localOk = localPath ? await pathExists(localPath) : false;
+        // 在线地址优先；兼容历史数据里 cover_path 直接存远程 URL 的情况
+        const remote = w.cover_url || (isRemote ? (w.cover_path ?? '') : '');
         if (!remote || localOk) continue;
         try {
           const local = await downloadCover(remote, { proxyMode: settings.proxyMode, proxyUrl: settings.proxyUrl, dataDir: settings.dataDir });
