@@ -108,6 +108,8 @@ async function openDatabase(): Promise<Database> {
   }
   await invoke('migrate_legacy_data');
   const defaultDir = await invoke<string>('get_data_dir');
+  // 全新安装且无旧数据时，默认数据目录可能不存在，需先创建再加载数据库
+  await invoke('ensure_data_dir', { dir: defaultDir });
   const path = `${defaultDir.replace(/\\/g, '/')}/acg.db`;
   const d = await Database.load(`sqlite:${path}`);
   await migrate(d);

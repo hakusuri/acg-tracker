@@ -1,6 +1,6 @@
 [package]
 name = "acg-tracker"
-version = "0.2.0"
+version = "0.2.1"
 description = "个人 ACG 作品记录应用（番剧/漫画/轻小说/Galgame）"
 authors = ["you"]
 edition = "2021"

@@ -2,8 +2,8 @@ use serde::Serialize;
 use std::time::Duration;
 use tauri::Manager;
 
-const UA_BANGUMI: &str = "acg-tracker/0.2.0 (personal anime tracker)";
-const UA_VNDB: &str = "acg-tracker/0.2.0 (personal galgame tracker)";
+const UA_BANGUMI: &str = "acg-tracker/0.2.1 (personal anime tracker)";
+const UA_VNDB: &str = "acg-tracker/0.2.1 (personal galgame tracker)";
 const DEFAULT_BANGUMI: &str = "https://api.bgm.tv";
 const DEFAULT_VNDB: &str = "https://api.vndb.org";
 
@@ -719,6 +719,8 @@ pub struct UpdateCheck {
 #[tauri::command]
 async fn migrate_legacy_data(app: tauri::AppHandle) -> Result<(), String> {
     let default_dir = default_data_dir(&app);
+    // 无论是否迁移，都确保默认数据目录存在（全新安装场景）
+    std::fs::create_dir_all(&default_dir).map_err(|e| format!("创建数据目录失败: {e}"))?;
     let old_dir = app
         .path()
         .app_config_dir()
@@ -728,7 +730,6 @@ async fn migrate_legacy_data(app: tauri::AppHandle) -> Result<(), String> {
     if new_db.exists() || !old_db.exists() {
         return Ok(());
     }
-    std::fs::create_dir_all(&default_dir).map_err(|e| format!("创建数据目录失败: {e}"))?;
 
     let dest = new_db.to_string_lossy().replace('\\', "/");
     let opts = sqlx::sqlite::SqliteConnectOptions::new()
