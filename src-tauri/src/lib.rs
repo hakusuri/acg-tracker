@@ -2,8 +2,8 @@ use serde::Serialize;
 use std::time::Duration;
 use tauri::Manager;
 
-const UA_BANGUMI: &str = "acg-tracker/0.1.0 (personal anime tracker)";
-const UA_VNDB: &str = "acg-tracker/0.1.0 (personal galgame tracker)";
+const UA_BANGUMI: &str = "acg-tracker/0.2.0 (personal anime tracker)";
+const UA_VNDB: &str = "acg-tracker/0.2.0 (personal galgame tracker)";
 const DEFAULT_BANGUMI: &str = "https://api.bgm.tv";
 const DEFAULT_VNDB: &str = "https://api.vndb.org";
 
