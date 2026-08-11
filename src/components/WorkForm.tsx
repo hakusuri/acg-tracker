@@ -6,29 +6,9 @@ import { deleteCoverFile, saveCover, toAssetUrl } from '../lib/api';
 import { CATEGORIES, CATEGORY_LABELS, SEASONS, SEASON_LABELS, STATUSES, STATUS_LABELS } from '../lib/constants';
 import { insertWork, updateWork, upsertBySourceId } from '../lib/db';
 import { useSettings } from '../lib/settings';
-import type { Category, LinkItem, Season, Status, Work, WorkInput } from '../types';
+import type { Category, LinkItem, Season, Status, Work, WorkFormPrefill, WorkInput } from '../types';
+export type { WorkFormPrefill };
 
-export interface WorkFormPrefill {
-  title?: string;
-  category?: Category;
-  year?: number | null;
-  season?: Season | null;
-  synopsis?: string;
-  cover_path?: string;
-  cover_url?: string;
-  rating?: number | null;
-  total_count?: number | null;
-  tags?: string;
-  links?: string;
-  source?: string;
-  start_date?: string | null;
-  end_date?: string | null;
-  game_path?: string;
-  bangumi_id?: number | null;
-  vndb_id?: string;
-  mal_id?: number | null;
-  anilist_id?: number | null;
-}
 
 interface Props {
   open: boolean;

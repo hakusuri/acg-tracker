@@ -3,18 +3,18 @@ import { open } from '@tauri-apps/plugin-dialog';
 import { readTextFile } from '@tauri-apps/plugin-fs';
 import WorkForm from '../components/WorkForm';
 import type { WorkFormPrefill } from '../components/WorkForm';
-import { downloadCover, searchBangumi, searchVndb } from '../lib/api';
+import { downloadCover, fetchBangumiSubject, searchBangumi, searchVndb } from '../lib/api';
 import type { ApiRequestConfig } from '../lib/api';
 import { useSettings } from '../lib/settings';
 import { CATEGORIES, CATEGORY_LABELS, SEASONS, SEASON_LABELS, STATUSES, STATUS_LABELS } from '../lib/constants';
 import { importWork, listWorks } from '../lib/db';
-import { normalizeTitle, parseAniListJson, parseBangumiCsv, parseKitsuCsv, parseMalXml, seasonFromDate } from '../lib/importers';
-import type { BangumiItem, Category, ImportRow, Season, Status, VndbItem, Work } from '../types';
+import { buildBangumiPrefill, buildVndbPrefill } from '../lib/prefills';
+import { normalizeTitle, parseAniListJson, parseBangumiCsv, parseKitsuCsv, parseMalXml } from '../lib/importers';
+import type { ApiCategory, BangumiItem, Category, ImportRow, Season, Status, VndbItem, Work } from '../types';
 
 type Tab = 'file' | 'api';
 type FileKind = 'mal' | 'bangumi' | 'anilist' | 'kitsu';
 type ApiSource = 'bangumi' | 'vndb';
-type ApiCategory = 'all' | Category;
 
 const API_CATEGORIES: Array<{ key: ApiCategory; label: string }> = [
   { key: 'all', label: '全部' },
@@ -207,81 +207,56 @@ export default function ImportPage() {
     }
   };
 
-  const addFromBangumi = async (item: BangumiItem) => {
-    const btypeCat: Category = item.btype === 1 ? 'manga' : item.btype === 4 ? 'galgame' : 'anime';
-    const category: Category =
-      apiCategory === 'light_novel'
-        ? 'light_novel'
-        : apiCategory === 'manga'
-          ? 'manga'
-          : apiCategory === 'anime'
-            ? 'anime'
-            : apiCategory === 'galgame'
-              ? 'galgame'
-              : btypeCat;
-    const year = item.date ? parseInt(item.date.slice(0, 4), 10) || null : null;
-    let cover = item.image ?? '';
-    if (cover && settings.downloadCovers) {
-      setAdding(true);
-      try {
-        cover = await downloadCover(cover, { proxyMode: settings.proxyMode, proxyUrl: settings.proxyUrl, dataDir: settings.dataDir });
-      } catch {
-        // 下载失败时保留远程地址
-      } finally {
-        setAdding(false);
-      }
+    const addFromBangumi = async (item: BangumiItem) => {
+    setAdding(true);
+    setApiError('');
+    try {
+      const full = await fetchBangumiSubject(item.id, {
+        apiBase: settings.bangumiApiBase,
+        proxyMode: settings.proxyMode,
+        proxyUrl: settings.proxyUrl,
+      });
+      setPrefill(
+        await buildBangumiPrefill(full, {
+          forceCategory: apiCategory,
+          downloadCovers: settings.downloadCovers,
+          download: (url) =>
+            downloadCover(url, {
+              proxyMode: settings.proxyMode,
+              proxyUrl: settings.proxyUrl,
+              dataDir: settings.dataDir,
+            }),
+        }),
+      );
+      setQuickOpen(true);
+    } catch (e) {
+      setApiError(`获取条目信息失败：${String(e)}`);
+    } finally {
+      setAdding(false);
     }
-    const totalCount =
-      category === 'anime'
-        ? (item.totalEpisodes ?? item.eps ?? null)
-        : (item.volumes ?? item.eps ?? null);
-    setPrefill({
-      title: item.nameCn || item.name,
-      category,
-      year,
-      season: category === 'anime' ? seasonFromDate(item.date ?? '') : null,
-      synopsis: item.summary,
-      cover_path: cover,
-      cover_url: item.image ?? '',
-      rating: item.score,
-      total_count: totalCount && totalCount > 0 ? totalCount : null,
-      tags: item.tags.slice(0, 10).join(','),
-      links: JSON.stringify([{ label: 'Bangumi', url: `https://bgm.tv/subject/${item.id}` }]),
-      source: 'bangumi',
-      bangumi_id: item.id,
-      start_date: item.date ?? null,
-    });
-    setQuickOpen(true);
   };
 
-  const addFromVndb = async (item: VndbItem) => {
-    const year = item.released ? parseInt(item.released.slice(0, 4), 10) || null : null;
-    let cover = item.image ?? '';
-    if (cover && settings.downloadCovers) {
-      setAdding(true);
-      try {
-        cover = await downloadCover(cover, { proxyMode: settings.proxyMode, proxyUrl: settings.proxyUrl, dataDir: settings.dataDir });
-      } catch {
-        // 下载失败时保留远程地址
-      } finally {
-        setAdding(false);
-      }
+    const addFromVndb = async (item: VndbItem) => {
+    setAdding(true);
+    setApiError('');
+    try {
+      setPrefill(
+        await buildVndbPrefill(item, {
+          downloadCovers: settings.downloadCovers,
+          download: (url) =>
+            downloadCover(url, {
+              proxyMode: settings.proxyMode,
+              proxyUrl: settings.proxyUrl,
+              dataDir: settings.dataDir,
+            }),
+        }),
+      );
+      setQuickOpen(true);
+    } catch (e) {
+      setApiError(`获取条目信息失败：${String(e)}`);
+    } finally {
+      setAdding(false);
     }
-    setPrefill({
-      title: item.title,
-      category: 'galgame',
-      year,
-      season: null,
-      synopsis: item.description ?? '',
-      cover_path: cover,
-      cover_url: item.image ?? '',
-      rating: item.rating != null ? Math.round((item.rating / 10) * 10) / 10 : null,
-      tags: item.tags.slice(0, 8).join(','),
-      links: JSON.stringify([{ label: 'VNDB', url: `https://vndb.org/${item.id}` }]),
-      source: 'vndb',
-      vndb_id: item.id,
-    });
-    setQuickOpen(true);
   };
 
   const selectedCount = rows.filter((r) => r.selected).length;

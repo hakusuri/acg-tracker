@@ -5,7 +5,7 @@ import type { WorkFormPrefill } from '../components/WorkForm';
 import { deleteCalendarCache, downloadCalendarCover, downloadCover, fetchBangumiCalendar, fetchBangumiSubject, readCalendarCache, writeCalendarCache } from '../lib/api';
 import type { ApiRequestConfig } from '../lib/api';
 import { listWorks, onWorksChanged } from '../lib/db';
-import { seasonFromDate } from '../lib/importers';
+import { buildBangumiPrefill } from '../lib/prefills';
 import { useSettings } from '../lib/settings';
 import type { CalendarCacheData, CalendarDay, CalendarItem, Category, Work } from '../types';
 
@@ -163,34 +163,19 @@ export default function CalendarPage() {
     setError('');
     try {
       const full = await fetchBangumiSubject(item.id, cfg);
-      const cat = btypeCategory(full.btype);
-      const year = full.date ? parseInt(full.date.slice(0, 4), 10) || null : null;
-      let cover = full.image ?? '';
-      if (cover && settings.downloadCovers) {
-        try {
-          cover = await downloadCover(cover, { proxyMode: settings.proxyMode, proxyUrl: settings.proxyUrl, dataDir: settings.dataDir });
-        } catch {
-          // 下载失败保留在线地址
-        }
-      }
-      const totalCount =
-        cat === 'anime' ? (full.totalEpisodes ?? full.eps ?? null) : (full.volumes ?? full.eps ?? null);
-      setPrefill({
-        title: full.nameCn || full.name,
-        category: cat,
-        year,
-        season: cat === 'anime' ? seasonFromDate(full.date ?? '') : null,
-        synopsis: full.summary,
-        cover_path: cover,
-        cover_url: full.image ?? '',
-        rating: full.score,
-        total_count: totalCount && totalCount > 0 ? totalCount : null,
-        tags: full.tags.slice(0, 10).join(','),
-        links: JSON.stringify([{ label: 'Bangumi', url: `https://bgm.tv/subject/${full.id}` }]),
-        source: 'bangumi',
-        bangumi_id: full.id,
-        start_date: full.date ?? null,
-      });
+      // 与 API 搜索页共用同一套预填逻辑，保证添加行为一致
+      setPrefill(
+        await buildBangumiPrefill(full, {
+          forceCategory: 'all',
+          downloadCovers: settings.downloadCovers,
+          download: (url) =>
+            downloadCover(url, {
+              proxyMode: settings.proxyMode,
+              proxyUrl: settings.proxyUrl,
+              dataDir: settings.dataDir,
+            }),
+        }),
+      );
       setQuickOpen(true);
     } catch (e) {
       setError(`获取条目信息失败：${String(e)}`);

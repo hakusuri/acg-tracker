@@ -1,6 +1,29 @@
 export type Category = 'anime' | 'manga' | 'light_novel' | 'galgame';
 export type Status = 'planned' | 'watching' | 'completed' | 'on_hold' | 'dropped';
 export type Season = 'winter' | 'spring' | 'summer' | 'autumn';
+export type ApiCategory = 'all' | Category;
+
+export interface WorkFormPrefill {
+  title?: string;
+  category?: Category;
+  year?: number | null;
+  season?: Season | null;
+  synopsis?: string;
+  cover_path?: string;
+  cover_url?: string;
+  rating?: number | null;
+  total_count?: number | null;
+  tags?: string;
+  links?: string;
+  source?: string;
+  start_date?: string | null;
+  end_date?: string | null;
+  game_path?: string;
+  bangumi_id?: number | null;
+  vndb_id?: string;
+  mal_id?: number | null;
+  anilist_id?: number | null;
+}
 
 export interface Work {
   id: number;
