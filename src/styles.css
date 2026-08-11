@@ -1281,6 +1281,7 @@ td {
   gap: 14px;
   padding: 10px 0;
   border-bottom: 1px solid var(--glass-border);
+  flex-wrap: wrap;
 }
 
 .setting-row:last-child {
@@ -1303,12 +1304,21 @@ td {
 }
 
 .setting-control {
-  flex-shrink: 0;
+  flex-shrink: 1;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .setting-btns {
   display: flex;
   gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+}
+
+.setting-btns .select {
+  max-width: 220px;
 }
 
 .setting-static {

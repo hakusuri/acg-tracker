@@ -52,6 +52,14 @@ function Toggle({ checked, onChange, disabled }: { checked: boolean; onChange: (
   );
 }
 
+function formatBackupTime(secs: string): string {
+  const n = Number(secs);
+  if (!n) return '';
+  const d = new Date(n * 1000);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleString('zh-CN', { hour12: false });
+}
+
 function formatBytes(size: number): string {
   if (size < 1024) return `${size} B`;
   if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
@@ -590,8 +598,8 @@ export default function SettingsPage() {
                   <option value="">暂无备份</option>
                 ) : (
                   backups.map((b) => (
-                    <option key={b.path} value={b.path}>
-                      {b.name}（{formatBytes(b.size)}）
+                    <option key={b.path} value={b.path} title={b.name}>
+                      {formatBackupTime(b.modified)} · {formatBytes(b.size)}
                     </option>
                   ))
                 )}
