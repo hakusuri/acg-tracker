@@ -7,6 +7,7 @@ import type { Category, Status } from '../types';
 
 export type ThemeMode = 'auto' | 'light' | 'dark';
 export type Density = 'comfortable' | 'compact';
+export type ViewMode = 'grid' | 'list';
 export type ProxyMode = 'auto' | 'direct' | 'custom';
 export type SortKey = 'created_desc' | 'created_asc' | 'year_desc' | 'year_asc' | 'rating_desc' | 'title';
 
@@ -15,6 +16,7 @@ export interface AppSettings {
   backgroundImage: string;
   theme: ThemeMode;
   density: Density;
+  viewMode: ViewMode;
   defaultCategory: Category;
   defaultStatus: Status;
   defaultSort: SortKey;
@@ -33,6 +35,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   backgroundImage: '',
   theme: 'auto',
   density: 'comfortable',
+  viewMode: 'grid',
   defaultCategory: 'anime',
   defaultStatus: 'planned',
   defaultSort: 'created_desc',
@@ -51,6 +54,7 @@ const SETTING_KEYS: Record<keyof AppSettings, string> = {
   backgroundImage: 'background_image',
   theme: 'theme',
   density: 'density',
+  viewMode: 'view_mode',
   defaultCategory: 'default_category',
   defaultStatus: 'default_status',
   defaultSort: 'default_sort',
@@ -66,6 +70,7 @@ const SETTING_KEYS: Record<keyof AppSettings, string> = {
 
 const THEMES: ThemeMode[] = ['auto', 'light', 'dark'];
 const DENSITIES: Density[] = ['comfortable', 'compact'];
+const VIEW_MODES: ViewMode[] = ['grid', 'list'];
 const PROXY_MODES: ProxyMode[] = ['auto', 'direct', 'custom'];
 const SORTS: SortKey[] = ['created_desc', 'created_asc', 'year_desc', 'year_asc', 'rating_desc', 'title'];
 const CATEGORIES: Category[] = ['anime', 'manga', 'light_novel', 'galgame'];
@@ -88,12 +93,13 @@ function bool(value: string | null, fallback: boolean): boolean {
 async function loadSettings(): Promise<AppSettings> {
   const read = (key: string) => getSetting(key);
   const [
-    theme, density, defaultCategory, defaultStatus, defaultSort, searchLimit,
+    theme, density, viewMode, defaultCategory, defaultStatus, defaultSort, searchLimit,
     downloadCovers, proxyMode, proxyUrl, bangumiApiBase, vndbApiBase, autoBackup, backupCount,
     backgroundImage,
   ] = await Promise.all([
     read(SETTING_KEYS.theme),
     read(SETTING_KEYS.density),
+    read(SETTING_KEYS.viewMode),
     read(SETTING_KEYS.defaultCategory),
     read(SETTING_KEYS.defaultStatus),
     read(SETTING_KEYS.defaultSort),
@@ -113,6 +119,7 @@ async function loadSettings(): Promise<AppSettings> {
     backgroundImage: backgroundImage ?? DEFAULT_SETTINGS.backgroundImage,
     theme: pick(theme, THEMES, DEFAULT_SETTINGS.theme),
     density: pick(density, DENSITIES, DEFAULT_SETTINGS.density),
+    viewMode: pick(viewMode, VIEW_MODES, DEFAULT_SETTINGS.viewMode),
     defaultCategory: pick(defaultCategory, CATEGORIES, DEFAULT_SETTINGS.defaultCategory),
     defaultStatus: pick(defaultStatus, STATUSES, DEFAULT_SETTINGS.defaultStatus),
     defaultSort: pick(defaultSort, SORTS, DEFAULT_SETTINGS.defaultSort),

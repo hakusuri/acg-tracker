@@ -7,11 +7,12 @@ import { downloadCover, searchBangumi, searchVndb } from '../lib/api';
 import type { ApiRequestConfig } from '../lib/api';
 import { useSettings } from '../lib/settings';
 import { CATEGORIES, CATEGORY_LABELS, SEASONS, SEASON_LABELS, STATUSES, STATUS_LABELS } from '../lib/constants';
-import { insertWork, listWorks } from '../lib/db';
-import { normalizeTitle, parseBangumiCsv, parseMalXml, seasonFromDate } from '../lib/importers';
-import type { BangumiItem, Category, ImportRow, Season, Status, VndbItem } from '../types';
+import { importWork, listWorks } from '../lib/db';
+import { normalizeTitle, parseAniListJson, parseBangumiCsv, parseKitsuCsv, parseMalXml, seasonFromDate } from '../lib/importers';
+import type { BangumiItem, Category, ImportRow, Season, Status, VndbItem, Work } from '../types';
 
 type Tab = 'file' | 'api';
+type FileKind = 'mal' | 'bangumi' | 'anilist' | 'kitsu';
 type ApiSource = 'bangumi' | 'vndb';
 type ApiCategory = 'all' | Category;
 
@@ -21,6 +22,13 @@ const API_CATEGORIES: Array<{ key: ApiCategory; label: string }> = [
   { key: 'manga', label: '漫画' },
   { key: 'light_novel', label: '轻小说' },
   { key: 'galgame', label: 'Galgame' },
+];
+
+const FILE_KINDS: Array<{ key: FileKind; label: string; filters: Array<{ name: string; extensions: string[] }> }> = [
+  { key: 'mal', label: 'MAL XML 文件', filters: [{ name: 'MAL 导出 XML', extensions: ['xml'] }] },
+  { key: 'bangumi', label: 'Bangumi CSV 文件', filters: [{ name: 'Bangumi CSV', extensions: ['csv', 'txt'] }] },
+  { key: 'anilist', label: 'AniList JSON 文件', filters: [{ name: 'AniList JSON', extensions: ['json', 'txt'] }] },
+  { key: 'kitsu', label: 'Kitsu CSV 文件', filters: [{ name: 'Kitsu CSV', extensions: ['csv', 'txt'] }] },
 ];
 
 function bangumiTypes(cat: ApiCategory): number[] {
@@ -37,10 +45,28 @@ function bangumiTypes(cat: ApiCategory): number[] {
   }
 }
 
+function makeConflictCheck(existing: Work[]) {
+  const titleSet = new Set(existing.map((w) => `${normalizeTitle(w.title)}|${w.year ?? ''}`));
+  const idSets = {
+    bangumi: new Set(existing.filter((w) => w.bangumi_id != null).map((w) => w.bangumi_id as number)),
+    vndb: new Set(existing.filter((w) => w.vndb_id).map((w) => w.vndb_id as string)),
+    mal: new Set(existing.filter((w) => w.mal_id != null).map((w) => w.mal_id as number)),
+    anilist: new Set(existing.filter((w) => w.anilist_id != null).map((w) => w.anilist_id as number)),
+  };
+  return (r: ImportRow): boolean => {
+    if (titleSet.has(`${normalizeTitle(r.title)}|${r.year ?? ''}`)) return true;
+    if (r.bangumi_id != null && idSets.bangumi.has(r.bangumi_id)) return true;
+    if (r.vndb_id && idSets.vndb.has(r.vndb_id)) return true;
+    if (r.mal_id != null && idSets.mal.has(r.mal_id)) return true;
+    if (r.anilist_id != null && idSets.anilist.has(r.anilist_id)) return true;
+    return false;
+  };
+}
+
 export default function ImportPage() {
   const [tab, setTab] = useState<Tab>('file');
   const [rows, setRows] = useState<ImportRow[]>([]);
-  const [fileKind, setFileKind] = useState<'mal' | 'bangumi' | null>(null);
+  const [fileKind, setFileKind] = useState<FileKind | null>(null);
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -65,36 +91,34 @@ export default function ImportPage() {
     return apiResults;
   }, [apiResults, apiSource, apiCategory]);
 
-  const pickFile = async (kind: 'mal' | 'bangumi') => {
+  const pickFile = async (kind: FileKind) => {
     const file = await open({
       multiple: false,
-      filters:
-        kind === 'mal'
-          ? [{ name: 'MAL 导出 XML', extensions: ['xml'] }]
-          : [{ name: 'Bangumi CSV', extensions: ['csv', 'txt'] }],
+      filters: FILE_KINDS.find((k) => k.key === kind)?.filters,
     });
     if (typeof file !== 'string') return;
     setBusy(true);
     setMessage('');
     try {
       const text = await readTextFile(file);
-      const parsed = kind === 'mal' ? parseMalXml(text) : parseBangumiCsv(text);
+      let parsed: ImportRow[] = [];
+      if (kind === 'mal') parsed = parseMalXml(text);
+      else if (kind === 'bangumi') parsed = parseBangumiCsv(text);
+      else if (kind === 'anilist') parsed = parseAniListJson(text);
+      else if (kind === 'kitsu') parsed = parseKitsuCsv(text);
       if (parsed.length === 0) {
         setRows([]);
         setFileKind(null);
         setMessage('未解析到任何作品记录，请检查文件是否为有效的导出文件');
         return;
       }
-      const existing = await listWorks();
-      const normalized = new Set(existing.map((w) => `${normalizeTitle(w.title)}|${w.year ?? ''}`));
-      setRows(
-        parsed.map((r) => {
-          const conflict = normalized.has(`${normalizeTitle(r.title)}|${r.year ?? ''}`);
-          return { ...r, conflict, selected: !conflict };
-        }),
-      );
+      const isConflict = makeConflictCheck(await listWorks());
+      setRows(parsed.map((r) => {
+        const conflict = isConflict(r);
+        return { ...r, conflict, selected: !conflict };
+      }));
       setFileKind(kind);
-      setMessage(`解析出 ${parsed.length} 条记录，重复项默认跳过`);
+      setMessage(`解析出 ${parsed.length} 条记录，重复项默认跳过（按标题+年份或来源 ID 判定）`);
     } catch (e) {
       setRows([]);
       setFileKind(null);
@@ -117,9 +141,11 @@ export default function ImportPage() {
     if (selected.length === 0) return;
     setBusy(true);
     try {
-      let count = 0;
+      let inserted = 0;
+      let merged = 0;
+      let skipped = 0;
       for (const r of selected) {
-        await insertWork({
+        const result = await importWork({
           title: r.title,
           category: r.category,
           year: r.year,
@@ -133,14 +159,23 @@ export default function ImportPage() {
           tags: r.tags,
           notes: r.notes,
           cover_path: r.cover_path,
+          cover_url: r.cover_url ?? '',
           links: r.links,
           source: r.source,
+          start_date: r.start_date ?? null,
+          end_date: r.end_date ?? null,
+          bangumi_id: r.bangumi_id ?? null,
+          vndb_id: r.vndb_id ?? '',
+          mal_id: r.mal_id ?? null,
+          anilist_id: r.anilist_id ?? null,
         });
-        count++;
+        if (result === 'inserted') inserted++;
+        else if (result === 'merged') merged++;
+        else skipped++;
       }
       setRows([]);
       setFileKind(null);
-      setMessage(`成功导入 ${count} 条记录`);
+      setMessage(`导入完成：新增 ${inserted} 条，合并 ${merged} 条，跳过重复 ${skipped} 条`);
     } catch (e) {
       setMessage(`导入失败：${String(e)}`);
     } finally {
@@ -213,6 +248,8 @@ export default function ImportPage() {
       tags: item.tags.slice(0, 10).join(','),
       links: JSON.stringify([{ label: 'Bangumi', url: `https://bgm.tv/subject/${item.id}` }]),
       source: 'bangumi',
+      bangumi_id: item.id,
+      start_date: item.date ?? null,
     });
     setQuickOpen(true);
   };
@@ -242,19 +279,21 @@ export default function ImportPage() {
       tags: item.tags.slice(0, 8).join(','),
       links: JSON.stringify([{ label: 'VNDB', url: `https://vndb.org/${item.id}` }]),
       source: 'vndb',
+      vndb_id: item.id,
     });
     setQuickOpen(true);
   };
 
   const selectedCount = rows.filter((r) => r.selected).length;
   const isBangumiResults = apiSource === 'bangumi';
+  const kindLabel = fileKind === 'mal' ? 'MAL XML' : fileKind === 'bangumi' ? 'Bangumi CSV' : fileKind === 'anilist' ? 'AniList JSON' : fileKind === 'kitsu' ? 'Kitsu CSV' : '';
 
   return (
     <div className="page">
       <div className="page-head">
         <div>
           <h1>数据导入</h1>
-          <p className="page-sub">从 MAL / Bangumi 导出文件，或通过 API 搜索导入</p>
+          <p className="page-sub">从 MAL / Bangumi / AniList / Kitsu 导出文件，或通过 API 搜索导入</p>
         </div>
       </div>
 
@@ -273,22 +312,23 @@ export default function ImportPage() {
         <div className="import-file">
           <div className="glass import-tip">
             <h3>支持的文件格式</h3>
-            <p><strong>MAL 导出 XML</strong>：从 MyAnimeList「Settings → Export」下载的 myanimelist.xml，会自动解析番剧与漫画两部分。</p>
-            <p><strong>Bangumi CSV</strong>：从 Bangumi 收藏页导出的 CSV 文件（需包含标题/名称列，其余列可选）。</p>
+            <p><strong>MAL 导出 XML</strong>：从 MyAnimeList「Settings → Export」下载的 myanimelist.xml，会自动解析番剧与漫画两部分（含来源 ID，换标题后仍可去重合并）。</p>
+            <p><strong>Bangumi CSV</strong>：从 Bangumi 收藏页导出的 CSV 文件（需包含标题/名称列，其余列可选；含 ID 列时可去重合并）。</p>
+            <p><strong>AniList JSON</strong>：从 AniList「Settings → Export」下载的 JSON 备份，自动解析番剧/漫画/轻小说与评分、进度、封面地址。</p>
+            <p><strong>Kitsu CSV</strong>：从 Kitsu 导出的 CSV 文件（按表头自适应解析标题、类型、状态、进度、评分等）。</p>
           </div>
           <div className="import-actions">
-            <button className="btn primary" onClick={() => void pickFile('mal')} disabled={busy}>
-              {busy ? '处理中…' : '选择 MAL XML 文件'}
-            </button>
-            <button className="btn ghost" onClick={() => void pickFile('bangumi')} disabled={busy}>
-              {busy ? '处理中…' : '选择 Bangumi CSV 文件'}
-            </button>
+            {FILE_KINDS.map((k) => (
+              <button key={k.key} className={`btn ${k.key === 'mal' ? 'primary' : 'ghost'}`} onClick={() => void pickFile(k.key)} disabled={busy}>
+                {busy ? '处理中…' : `选择 ${k.label}`}
+              </button>
+            ))}
           </div>
 
           {rows.length > 0 && (
             <div className="glass import-preview">
               <div className="import-preview-head">
-                <h3>导入预览（{fileKind === 'mal' ? 'MAL XML' : 'Bangumi CSV'}）</h3>
+                <h3>导入预览（{kindLabel}）</h3>
                 <label className="check-label">
                   <input type="checkbox" checked={selectedCount === rows.length} onChange={(e) => toggleAll(e.target.checked)} />
                   全选
@@ -340,7 +380,7 @@ export default function ImportPage() {
                             >
                               <option value="">未知</option>
                               {SEASONS.map((s) => (
-                                <option key={s} value={s}>{SEASON_LABELS[s]}</option>
+                                <option key={s} value={s}>{SEASON_LABELS[s]}季</option>
                               ))}
                             </select>
                           ) : (
@@ -382,8 +422,8 @@ export default function ImportPage() {
         <div className="import-api">
           <div className="glass import-tip">
             <h3>API 搜索</h3>
-            <p><strong>Bangumi</strong>：按关键词搜索全部类别，自动带出简介、封面与链接，单次最多返回 {settings.searchLimit} 条，可再按类别筛选结果。</p>
-            <p><strong>VNDB</strong>：按关键词搜索 Galgame，自动带出简介、封面与 VNDB 链接，单次最多返回 {settings.searchLimit} 条。</p>
+            <p><strong>Bangumi</strong>：按关键词搜索全部类别，自动带出简介、封面、评分、总集数/卷数与链接（含 Bangumi ID，重复添加会自动合并）；单次最多返回 {settings.searchLimit} 条，可再按类别筛选结果。</p>
+            <p><strong>VNDB</strong>：按关键词搜索 Galgame，自动带出简介、封面、评分与 VNDB 链接（含 VNDB ID，重复添加会自动合并）；单次最多返回 {settings.searchLimit} 条。</p>
           </div>
           <div className="api-search-bar glass">
             <div className="filter-group">
@@ -477,7 +517,7 @@ export default function ImportPage() {
         onClose={() => setQuickOpen(false)}
         onSaved={() => {
           setQuickOpen(false);
-          setMessage('已添加，可继续搜索并添加其他作品');
+          setMessage('已添加（若已存在同源作品则自动合并），可继续搜索并添加其他作品');
         }}
       />
     </div>

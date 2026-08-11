@@ -4,10 +4,30 @@ import CoverImage from '../components/CoverImage';
 import EmptyState from '../components/EmptyState';
 import GlassModal from '../components/GlassModal';
 import WorkForm from '../components/WorkForm';
-import { openExternal } from '../lib/api';
+import { launchGame, openExternal } from '../lib/api';
 import { CATEGORY_COLORS, CATEGORY_LABELS, SEASON_LABELS, SOURCE_LABELS, STATUS_COLORS, STATUS_LABELS } from '../lib/constants';
-import { deleteWork, getWork, onWorksChanged } from '../lib/db';
-import type { LinkItem, Work } from '../types';
+import { deleteWork, finishPlaySession, formatMinutes, getWork, listActivityByWork, listPlaySessions, onWorksChanged } from '../lib/db';
+import type { ActivityEntry, LinkItem, PlaySession, Work } from '../types';
+
+const TIMER_KEY = 'acg_active_timer';
+
+interface ActiveTimer {
+  workId: number;
+  title: string;
+  startedAt: string;
+}
+
+function readTimer(): ActiveTimer | null {
+  try {
+    const raw = localStorage.getItem(TIMER_KEY);
+    if (!raw) return null;
+    const t = JSON.parse(raw) as ActiveTimer;
+    if (typeof t.workId !== 'number' || typeof t.title !== 'string' || typeof t.startedAt !== 'string') return null;
+    return t;
+  } catch {
+    return null;
+  }
+}
 
 function parseLinks(raw: string): LinkItem[] {
   if (!raw) return [];
@@ -26,11 +46,34 @@ function progressText(w: Work): string {
   return `${cur} / ${total}`;
 }
 
-function formatDate(iso: string): string {
+function formatDate(iso: string | null | undefined): string {
   if (!iso) return '—';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso;
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso.slice(0, 10);
   return d.toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' });
+}
+
+function pad2(n: number): string {
+  return String(n).padStart(2, '0');
+}
+
+function fmtElapsed(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  return `${pad2(h)}:${pad2(m)}:${pad2(s)}`;
+}
+
+function sourceIdLinks(w: Work): LinkItem[] {
+  const out: LinkItem[] = [];
+  if (w.bangumi_id != null) out.push({ label: 'Bangumi', url: `https://bgm.tv/subject/${w.bangumi_id}` });
+  if (w.vndb_id) out.push({ label: 'VNDB', url: `https://vndb.org/${w.vndb_id}` });
+  const mediaType = w.category === 'anime' ? 'anime' : 'manga';
+  if (w.mal_id != null) out.push({ label: 'MAL', url: `https://myanimelist.net/${mediaType}/${w.mal_id}` });
+  if (w.anilist_id != null) out.push({ label: 'AniList', url: `https://anilist.co/${mediaType}/${w.anilist_id}` });
+  return out;
 }
 
 export default function DetailPage() {
@@ -41,11 +84,19 @@ export default function DetailPage() {
   const [loading, setLoading] = useState(true);
   const [editOpen, setEditOpen] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [sessions, setSessions] = useState<PlaySession[]>([]);
+  const [activity, setActivity] = useState<ActivityEntry[]>([]);
+  const [timer, setTimer] = useState<ActiveTimer | null>(readTimer);
+  const [nowTs, setNowTs] = useState(Date.now());
+  const [launchMsg, setLaunchMsg] = useState('');
 
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      setWork(await getWork(workId));
+      const w = await getWork(workId);
+      setWork(w);
+      setSessions(await listPlaySessions(workId, 8));
+      setActivity(await listActivityByWork(workId, 5));
     } catch (e) {
       console.error('加载失败', e);
     } finally {
@@ -58,9 +109,52 @@ export default function DetailPage() {
     return onWorksChanged(() => void refresh());
   }, [refresh]);
 
+  useEffect(() => {
+    if (!timer) return;
+    const iv = window.setInterval(() => setNowTs(Date.now()), 1000);
+    return () => window.clearInterval(iv);
+  }, [timer]);
+
   const remove = async () => {
     await deleteWork(workId);
     navigate('/');
+  };
+
+  const startTimer = () => {
+    if (!work) return;
+    if (timer) {
+      if (timer.workId === work.id) return;
+      if (!window.confirm(`正在为《${timer.title}》计时，开始新计时前将结束原计时。是否继续？`)) return;
+      void stopTimer();
+    }
+    const t: ActiveTimer = { workId: work.id, title: work.title, startedAt: new Date().toISOString() };
+    localStorage.setItem(TIMER_KEY, JSON.stringify(t));
+    setTimer(t);
+    setNowTs(Date.now());
+  };
+
+  const stopTimer = async () => {
+    if (!timer) return;
+    const started = new Date(timer.startedAt).getTime();
+    const secs = Math.max(0, Math.floor((nowTs - started) / 1000));
+    localStorage.removeItem(TIMER_KEY);
+    setTimer(null);
+    if (secs < 1) return;
+    try {
+      await finishPlaySession(timer.workId, timer.startedAt, new Date().toISOString(), secs);
+    } catch (e) {
+      console.error('计时保存失败', e);
+    }
+  };
+
+  const launch = async () => {
+    if (!work?.game_path) return;
+    setLaunchMsg('');
+    try {
+      await launchGame(work.game_path);
+    } catch (e) {
+      setLaunchMsg(`启动失败：${String(e)}`);
+    }
   };
 
   if (loading) return <div className="loading">正在加载…</div>;
@@ -68,7 +162,7 @@ export default function DetailPage() {
   if (!work) {
     return (
       <div className="page">
-        <EmptyState icon="🫥" title="作品不存在或已被删除">
+        <EmptyState icon="🚫" title="作品不存在或已被删除">
           <button className="btn primary" onClick={() => navigate('/')}>返回首页</button>
         </EmptyState>
       </div>
@@ -80,7 +174,10 @@ export default function DetailPage() {
     .map((t) => t.trim())
     .filter(Boolean);
   const links = parseLinks(work.links);
+  const idLinks = sourceIdLinks(work);
   const categoryColor = CATEGORY_COLORS[work.category];
+  const playtime = work.playtime_minutes ?? 0;
+  const elapsed = timer && timer.workId === work.id ? nowTs - new Date(timer.startedAt).getTime() : 0;
 
   return (
     <div className="page">
@@ -93,10 +190,15 @@ export default function DetailPage() {
           <div className="detail-head">
             <h1>{work.title}</h1>
             <div className="detail-actions">
+              {work.category === 'galgame' && work.game_path && (
+                <button className="btn primary" onClick={() => void launch()}>▶ 启动游戏</button>
+              )}
               <button className="btn ghost" onClick={() => setEditOpen(true)}>编辑</button>
               <button className="btn danger" onClick={() => setConfirmOpen(true)}>删除</button>
             </div>
           </div>
+
+          {launchMsg && <div className="msg msg-error">{launchMsg}</div>}
 
           <div className="badge-row">
             <span className="chip chip-static" style={{ color: categoryColor, borderColor: categoryColor }}>
@@ -129,6 +231,20 @@ export default function DetailPage() {
               <span className="info-label">进度</span>
               <strong>{progressText(work)}</strong>
             </div>
+            <div className="info-item">
+              <span className="info-label">开始日期</span>
+              <strong>{formatDate(work.start_date)}</strong>
+            </div>
+            <div className="info-item">
+              <span className="info-label">结束日期</span>
+              <strong>{formatDate(work.end_date)}</strong>
+            </div>
+            {(work.category === 'galgame' || playtime > 0) && (
+              <div className="info-item">
+                <span className="info-label">累计时长</span>
+                <strong>{playtime > 0 ? formatMinutes(playtime) : '—'}</strong>
+              </div>
+            )}
             <div className="info-item">
               <span className="info-label">添加时间</span>
               <strong>{formatDate(work.created_at)}</strong>
@@ -170,6 +286,77 @@ export default function DetailPage() {
               </div>
             </section>
           )}
+
+          {idLinks.length > 0 && (
+            <section className="detail-section">
+              <h2>来源 ID</h2>
+              <div className="tag-row">
+                {idLinks.map((l, i) => (
+                  <button key={`${l.url}-${i}`} className="link-btn" onClick={() => void openExternal(l.url)}>
+                    {l.label} · {l.url.split('/').pop()}
+                  </button>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {work.category === 'galgame' && (
+            <section className="detail-section">
+              <h2>游玩</h2>
+              {work.game_path ? (
+                <div className="game-path-row">
+                  <span className="game-path-text" title={work.game_path}>{work.game_path}</span>
+                </div>
+              ) : (
+                <p className="detail-text">尚未设置游戏路径，可在「编辑」中为 Galgame 指定可执行文件。</p>
+              )}
+              <div className="timer-box">
+                {timer && timer.workId === work.id ? (
+                  <>
+                    <div className="timer-display">{fmtElapsed(elapsed)}</div>
+                    <button className="btn danger" onClick={() => void stopTimer()}>结束计时</button>
+                  </>
+                ) : timer ? (
+                  <p className="detail-text">
+                    正在为《{timer.title}》计时（点击开始会先结束原计时）
+                  </p>
+                ) : (
+                  <p className="detail-text">计时器会累加到累计时长，并记录一次游玩动态。</p>
+                )}
+                {(!timer || timer.workId !== work.id) && (
+                  <button className="btn primary" onClick={startTimer}>开始计时</button>
+                )}
+                {timer && timer.workId !== work.id && (
+                  <button className="btn ghost" onClick={() => void stopTimer()}>结束《{timer.title}》计时</button>
+                )}
+              </div>
+              {sessions.length > 0 && (
+                <div className="session-list">
+                  <div className="session-list-title">最近游玩记录</div>
+                  {sessions.map((s) => (
+                    <div className="session-item" key={s.id}>
+                      <span>{formatDate(s.started_at)}</span>
+                      <span>{s.duration_seconds != null ? formatMinutes(Math.round(s.duration_seconds / 60)) : '—'}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+          )}
+
+          {activity.length > 0 && (
+            <section className="detail-section">
+              <h2>最近动态</h2>
+              <div className="activity-mini">
+                {activity.map((a) => (
+                  <div className="activity-mini-item" key={a.id}>
+                    <span className="activity-mini-time">{formatDate(a.created_at)}</span>
+                    <span>{a.detail}</span>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
         </div>
       </div>
 
@@ -184,7 +371,7 @@ export default function DetailPage() {
       />
 
       <GlassModal open={confirmOpen} onClose={() => setConfirmOpen(false)} title="删除作品">
-        <p className="confirm-text">确定要删除「{work.title}」吗？此操作不可恢复。</p>
+        <p className="confirm-text">确定要删除《{work.title}》吗？此操作不可恢复。</p>
         <div className="modal-foot">
           <button className="btn ghost" onClick={() => setConfirmOpen(false)}>取消</button>
           <button className="btn danger" onClick={() => void remove()}>确认删除</button>

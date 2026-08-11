@@ -870,6 +870,184 @@ async fn migrate_data_dir(app: tauri::AppHandle, new_dir: String) -> Result<Stri
     Ok(target.to_string_lossy().into_owned())
 }
 
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct CalendarItem {
+    pub id: i64,
+    pub name: String,
+    pub name_cn: String,
+    pub date: Option<String>,
+    pub image: Option<String>,
+    pub score: Option<f64>,
+    pub eps: Option<i64>,
+    pub btype: i64,
+}
+
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct CalendarDay {
+    pub weekday: i64,
+    pub en: String,
+    pub cn: String,
+    pub ja: String,
+    pub items: Vec<CalendarItem>,
+}
+
+#[tauri::command]
+async fn fetch_bangumi_calendar(
+    api_base: String,
+    proxy_mode: String,
+    proxy_url: String,
+) -> Result<Vec<CalendarDay>, String> {
+    let base = base_url(&api_base, DEFAULT_BANGUMI);
+    let url = format!("{base}/calendar");
+    let resp = send_with_fallback(
+        |client| client.get(url.clone()).header("User-Agent", UA_BANGUMI),
+        &proxy_mode,
+        &proxy_url,
+    )
+    .await?;
+    let resp = check_status(resp, "Bangumi").await?;
+    let body: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Bangumi 响应解析失败: {e}"))?;
+    let arr = body.as_array().cloned().unwrap_or_default();
+    let mut days = Vec::new();
+    for (i, day) in arr.into_iter().enumerate() {
+        let weekday = day.get("weekday");
+        let id = weekday
+            .and_then(|w| w.get("id"))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(i as i64 + 1);
+        let en = weekday
+            .and_then(|w| w.get("en"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let cn = weekday
+            .and_then(|w| w.get("cn"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let ja = weekday
+            .and_then(|w| w.get("ja"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let mut items = Vec::new();
+        if let Some(list) = day.get("items").and_then(|v| v.as_array()) {
+            for it in list {
+                let score = it
+                    .get("rating")
+                    .and_then(|r| r.get("score"))
+                    .and_then(|v| v.as_f64());
+                items.push(CalendarItem {
+                    id: it.get("id").and_then(|v| v.as_i64()).unwrap_or(0),
+                    name: it.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                    name_cn: it.get("name_cn").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                    date: it.get("date").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                    image: extract_bangumi_image(it),
+                    score,
+                    eps: it
+                        .get("eps")
+                        .and_then(|v| v.as_i64())
+                        .or_else(|| it.get("total_episodes").and_then(|v| v.as_i64())),
+                    btype: it.get("type").and_then(|v| v.as_i64()).unwrap_or(2),
+                });
+            }
+        }
+        days.push(CalendarDay {
+            weekday: id,
+            en,
+            cn,
+            ja,
+            items,
+        });
+    }
+    days.sort_by_key(|d| d.weekday);
+    Ok(days)
+}
+
+#[tauri::command]
+async fn fetch_bangumi_subject(
+    subject_id: i64,
+    api_base: String,
+    proxy_mode: String,
+    proxy_url: String,
+) -> Result<BangumiItem, String> {
+    let base = base_url(&api_base, DEFAULT_BANGUMI);
+    let url = format!("{base}/v0/subjects/{subject_id}");
+    let resp = send_with_fallback(
+        |client| client.get(url.clone()).header("User-Agent", UA_BANGUMI),
+        &proxy_mode,
+        &proxy_url,
+    )
+    .await?;
+    let resp = check_status(resp, "Bangumi").await?;
+    let it: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Bangumi 响应解析失败: {e}"))?;
+
+    let mut tags = Vec::new();
+    if let Some(arr) = it.get("meta_tags").and_then(|v| v.as_array()) {
+        for v in arr {
+            if let Some(s) = v.as_str() {
+                if !s.trim().is_empty() && !tags.contains(&s.to_string()) {
+                    tags.push(s.to_string());
+                }
+            }
+        }
+    }
+    if let Some(arr) = it.get("tags").and_then(|v| v.as_array()) {
+        for v in arr {
+            if let Some(s) = v.get("name").and_then(|x| x.as_str()) {
+                let s = s.to_string();
+                if !tags.contains(&s) {
+                    tags.push(s);
+                }
+            }
+        }
+    }
+    tags.truncate(10);
+
+    let score = it
+        .get("rating")
+        .and_then(|r| r.get("score"))
+        .and_then(|v| v.as_f64());
+
+    Ok(BangumiItem {
+        id: it.get("id").and_then(|v| v.as_i64()).unwrap_or(0),
+        name: it.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+        name_cn: it.get("name_cn").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+        summary: it.get("summary").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+        date: it.get("date").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        image: extract_bangumi_image(&it),
+        score,
+        eps: it.get("eps").and_then(|v| v.as_i64()),
+        volumes: it.get("volumes").and_then(|v| v.as_i64()),
+        total_episodes: it.get("total_episodes").and_then(|v| v.as_i64()),
+        tags,
+        btype: it.get("type").and_then(|v| v.as_i64()).unwrap_or(2),
+    })
+}
+
+#[tauri::command]
+fn launch_game(path: String) -> Result<(), String> {
+    let p = path.trim();
+    if p.is_empty() {
+        return Err("游戏路径为空".to_string());
+    }
+    if !std::path::Path::new(p).exists() {
+        return Err("游戏文件不存在".to_string());
+    }
+    std::process::Command::new(p)
+        .spawn()
+        .map_err(|e| format!("启动失败: {e}"))?;
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -878,6 +1056,9 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
+            fetch_bangumi_calendar,
+            fetch_bangumi_subject,
+            launch_game,
             search_bangumi,
             search_vndb,
             download_cover,
@@ -908,6 +1089,34 @@ pub fn run() {
 mod api_tests {
     use super::*;
 
+
+    #[tokio::test]
+    async fn check_calendar() {
+        let (pm, pu) = ("auto".to_string(), String::new());
+        match fetch_bangumi_calendar("https://api.bgm.tv".to_string(), pm, pu).await {
+            Ok(v) => println!(
+                "CALENDAR OK days={} items={} first={:?}",
+                v.len(),
+                v.iter().map(|d| d.items.len()).sum::<usize>(),
+                v.first()
+                    .and_then(|d| d.items.first())
+                    .map(|x| (x.id, x.name_cn.clone(), x.eps, x.image.clone()))
+            ),
+            Err(e) => println!("CALENDAR ERR {e}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn check_subject() {
+        let (pm, pu) = ("auto".to_string(), String::new());
+        match fetch_bangumi_subject(7, "https://api.bgm.tv".to_string(), pm, pu).await {
+            Ok(x) => println!(
+                "SUBJECT OK id={} name={:?} eps={:?} img={:?}",
+                x.id, x.name_cn, x.total_episodes, x.image
+            ),
+            Err(e) => println!("SUBJECT ERR {e}"),
+        }
+    }
 
     #[tokio::test]
     async fn check_bangumi() {

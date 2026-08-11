@@ -48,4 +48,6 @@ export const SOURCE_LABELS: Record<string, string> = {
   mal: 'MAL',
   bangumi: 'Bangumi',
   vndb: 'VNDB',
+  anilist: 'AniList',
+  kitsu: 'Kitsu',
 };

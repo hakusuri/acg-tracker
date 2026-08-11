@@ -20,6 +20,14 @@ export interface Work {
   cover_url?: string;
   links: string;
   source: string;
+  start_date?: string | null;
+  end_date?: string | null;
+  playtime_minutes?: number;
+  game_path?: string;
+  bangumi_id?: number | null;
+  vndb_id?: string;
+  mal_id?: number | null;
+  anilist_id?: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -27,20 +35,28 @@ export interface Work {
 export interface WorkInput {
   title: string;
   category: Category;
-  year: number | null;
-  season: Season | null;
+  year?: number | null;
+  season?: Season | null;
   status: Status;
-  total_count: number | null;
-  current_count: number | null;
-  rating: number | null;
-  my_rating: number | null;
-  synopsis: string;
-  tags: string;
-  notes: string;
-  cover_path: string;
+  total_count?: number | null;
+  current_count?: number | null;
+  rating?: number | null;
+  my_rating?: number | null;
+  synopsis?: string;
+  tags?: string;
+  notes?: string;
+  cover_path?: string;
   cover_url?: string;
-  links: string;
-  source: string;
+  links?: string;
+  source?: string;
+  start_date?: string | null;
+  end_date?: string | null;
+  playtime_minutes?: number;
+  game_path?: string;
+  bangumi_id?: number | null;
+  vndb_id?: string;
+  mal_id?: number | null;
+  anilist_id?: number | null;
 }
 
 export interface LinkItem {
@@ -73,6 +89,41 @@ export interface VndbItem {
   tags: string[];
 }
 
+export interface CalendarItem {
+  id: number;
+  name: string;
+  nameCn: string;
+  date: string | null;
+  image: string | null;
+  score: number | null;
+  eps: number | null;
+  btype: number;
+}
+
+export interface CalendarDay {
+  weekday: number;
+  en: string;
+  cn: string;
+  ja: string;
+  items: CalendarItem[];
+}
+
+export interface ActivityEntry {
+  id: number;
+  work_id: number | null;
+  action: string;
+  detail: string;
+  created_at: string;
+}
+
+export interface PlaySession {
+  id: number;
+  work_id: number;
+  started_at: string;
+  ended_at: string | null;
+  duration_seconds: number | null;
+}
+
 export interface BackupInfo {
   name: string;
   path: string;
@@ -101,8 +152,15 @@ export interface ImportRow {
   tags: string;
   notes: string;
   cover_path: string;
+  cover_url?: string;
   links: string;
   source: string;
+  start_date?: string | null;
+  end_date?: string | null;
+  bangumi_id?: number | null;
+  vndb_id?: string;
+  mal_id?: number | null;
+  anilist_id?: number | null;
   conflict: boolean;
   selected: boolean;
 }

@@ -6,11 +6,11 @@ import GlassModal from '../components/GlassModal';
 import { backupDatabase, checkUpdate, deleteAllCovers, deleteBackground, deleteCoverFile, downloadCover, getDataDir, listBackups, migrateDataDir, openDataDir, pathExists, restoreBackup, saveBackground, setBootstrapDataDir, toAssetUrl } from '../lib/api';
 import { openExternal } from '../lib/api';
 import { CATEGORIES, CATEGORY_LABELS, STATUSES, STATUS_LABELS } from '../lib/constants';
-import { clearWorks, closeDatabase, getSetting, insertWork, listWorks, reloadDatabase, setSetting, updateWork } from '../lib/db';
+import { clearWorks, closeDatabase, getSetting, insertWork, listWorks, reloadDatabase, setSetting, updateWork, workToInput } from '../lib/db';
 import { normalizeTitle } from '../lib/importers';
 import { useSettings } from '../lib/settings';
-import type { AppSettings, Density, ProxyMode, SortKey, ThemeMode } from '../lib/settings';
-import type { BackupInfo, UpdateCheck, Work, WorkInput } from '../types';
+import type { AppSettings, Density, ProxyMode, SortKey, ThemeMode, ViewMode } from '../lib/settings';
+import type { BackupInfo, UpdateCheck, Work } from '../types';
 import pkg from '../../package.json';
 
 const SORT_LABELS: Record<SortKey, string> = {
@@ -24,6 +24,7 @@ const SORT_LABELS: Record<SortKey, string> = {
 
 const THEME_LABELS: Record<ThemeMode, string> = { auto: '跟随系统', light: '浅色', dark: '深色' };
 const DENSITY_LABELS: Record<Density, string> = { comfortable: '舒适', compact: '紧凑' };
+const VIEW_LABELS: Record<ViewMode, string> = { grid: '网格', list: '列表' };
 const PROXY_LABELS: Record<ProxyMode, string> = { auto: '跟随系统', direct: '直连', custom: '自定义' };
 
 function SettingRow({ label, desc, children }: { label: string; desc?: string; children?: ReactNode }) {
@@ -130,6 +131,42 @@ export default function SettingsPage() {
     }
   };
 
+  const exportCsv = async () => {
+    setBusy(true);
+    setMessage('');
+    try {
+      const works = await listWorks();
+      const headers = [
+        'id', 'title', 'category', 'year', 'season', 'status', 'total_count', 'current_count',
+        'rating', 'my_rating', 'synopsis', 'tags', 'notes', 'cover_path', 'cover_url', 'links',
+        'source', 'start_date', 'end_date', 'playtime_minutes', 'game_path', 'bangumi_id',
+        'vndb_id', 'mal_id', 'anilist_id', 'created_at', 'updated_at',
+      ];
+      const esc = (v: unknown): string => {
+        const s = v == null ? '' : String(v);
+        return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+      };
+      const lines = [
+        headers.join(','),
+        ...works.map((w) => headers.map((h) => esc((w as unknown as Record<string, unknown>)[h])).join(',')),
+      ];
+      const csv = '\ufeff' + lines.join('\r\n');
+      const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+      const path = await save({
+        defaultPath: `acg-tracker-export-${stamp}.csv`,
+        filters: [{ name: 'CSV', extensions: ['csv'] }],
+      });
+      if (typeof path === 'string') {
+        await writeTextFile(path, csv);
+        setMessage(`已导出 ${works.length} 条作品到 ${path}`);
+      }
+    } catch (e) {
+      setMessage(`导出失败：${String(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const importData = async () => {
     setBusy(true);
     setMessage('');
@@ -172,6 +209,14 @@ export default function SettingsPage() {
           cover_url: cover.url,
           links: w.links ?? '',
           source: w.source ?? 'manual',
+          start_date: w.start_date ?? null,
+          end_date: w.end_date ?? null,
+          playtime_minutes: w.playtime_minutes ?? 0,
+          game_path: w.game_path ?? '',
+          bangumi_id: w.bangumi_id ?? null,
+          vndb_id: w.vndb_id ?? '',
+          mal_id: w.mal_id ?? null,
+          anilist_id: w.anilist_id ?? null,
         });
         imported++;
       }
@@ -297,25 +342,6 @@ export default function SettingsPage() {
       setBusy(false);
     }
   };
-
-  const workToInput = (w: Work): WorkInput => ({
-    title: w.title,
-    category: w.category,
-    year: w.year,
-    season: w.season,
-    status: w.status,
-    total_count: w.total_count,
-    current_count: w.current_count,
-    rating: w.rating,
-    my_rating: w.my_rating,
-    synopsis: w.synopsis,
-    tags: w.tags,
-    notes: w.notes,
-    cover_path: w.cover_path,
-    cover_url: w.cover_url,
-    links: w.links,
-    source: w.source,
-  });
 
   const cacheCovers = async () => {
     setBusy(true);
@@ -448,6 +474,13 @@ export default function SettingsPage() {
             <select className="select select-sm" value={settings.density} onChange={(e) => patch('density', e.target.value as Density)}>
               {(Object.keys(DENSITY_LABELS) as Density[]).map((k) => (
                 <option key={k} value={k}>{DENSITY_LABELS[k]}</option>
+              ))}
+            </select>
+          </SettingRow>
+          <SettingRow label="默认视图" desc="首页作品的展示方式">
+            <select className="select select-sm" value={settings.viewMode} onChange={(e) => patch('viewMode', e.target.value as ViewMode)}>
+              {(Object.keys(VIEW_LABELS) as ViewMode[]).map((k) => (
+                <option key={k} value={k}>{VIEW_LABELS[k]}</option>
               ))}
             </select>
           </SettingRow>
@@ -612,6 +645,11 @@ export default function SettingsPage() {
           <SettingRow label="导出数据" desc="将全部作品导出为 JSON 备份文件">
             <button className="btn ghost" type="button" onClick={() => void exportData()} disabled={busy}>
               {busy ? '处理中…' : '导出 JSON'}
+            </button>
+          </SettingRow>
+          <SettingRow label="导出 CSV" desc="将全部作品导出为 CSV（可用 Excel 打开）">
+            <button className="btn ghost" type="button" onClick={() => void exportCsv()} disabled={busy}>
+              {busy ? '处理中…' : '导出 CSV'}
             </button>
           </SettingRow>
           <SettingRow label="导入数据" desc="从 JSON 备份恢复/合并（自动跳过重复）">

@@ -5,11 +5,13 @@ import { backupDatabase, toAssetUrl } from './lib/api';
 import { setSetting } from './lib/db';
 import { onRequestAddWork } from './lib/events';
 import { SettingsProvider, useSettings } from './lib/settings';
+import CalendarPage from './pages/CalendarPage';
 import DetailPage from './pages/DetailPage';
 import HomePage from './pages/HomePage';
 import ImportPage from './pages/ImportPage';
 import SettingsPage from './pages/SettingsPage';
 import StatsPage from './pages/StatsPage';
+import TimelinePage from './pages/TimelinePage';
 
 function TopBar() {
   const navigate = useNavigate();
@@ -32,6 +34,12 @@ function TopBar() {
         <nav className="nav-links">
           <NavLink to="/" end className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
             首页
+          </NavLink>
+          <NavLink to="/calendar" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
+            日历
+          </NavLink>
+          <NavLink to="/activity" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
+            动态
           </NavLink>
           <NavLink to="/stats" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
             统计
@@ -91,6 +99,8 @@ function AppInner() {
         <Routes>
           <Route path="/" element={<HomePage />} />
           <Route path="/work/:id" element={<DetailPage />} />
+          <Route path="/calendar" element={<CalendarPage />} />
+          <Route path="/activity" element={<TimelinePage />} />
           <Route path="/stats" element={<StatsPage />} />
           <Route path="/import" element={<ImportPage />} />
           <Route path="/settings" element={<SettingsPage />} />

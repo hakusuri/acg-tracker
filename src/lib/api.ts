@@ -1,6 +1,6 @@
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { openUrl } from '@tauri-apps/plugin-opener';
-import type { BackupInfo, BangumiItem, UpdateCheck, VndbItem } from '../types';
+import type { BackupInfo, BangumiItem, CalendarDay, UpdateCheck, VndbItem } from '../types';
 
 export interface ApiRequestConfig {
   limit: number;
@@ -33,6 +33,23 @@ export const searchVndb = (keyword: string, cfg: ApiRequestConfig) =>
     proxyMode: cfg.proxyMode,
     proxyUrl: cfg.proxyUrl,
   });
+
+export const fetchBangumiCalendar = (cfg: { apiBase: string; proxyMode: string; proxyUrl: string }) =>
+  invoke<CalendarDay[]>('fetch_bangumi_calendar', {
+    apiBase: cfg.apiBase,
+    proxyMode: cfg.proxyMode,
+    proxyUrl: cfg.proxyUrl,
+  });
+
+export const fetchBangumiSubject = (subjectId: number, cfg: { apiBase: string; proxyMode: string; proxyUrl: string }) =>
+  invoke<BangumiItem>('fetch_bangumi_subject', {
+    subjectId,
+    apiBase: cfg.apiBase,
+    proxyMode: cfg.proxyMode,
+    proxyUrl: cfg.proxyUrl,
+  });
+
+export const launchGame = (path: string) => invoke<void>('launch_game', { path });
 
 export const downloadCover = (url: string, cfg: CoverDownloadConfig) =>
   invoke<string>('download_cover', {
