@@ -1136,7 +1136,48 @@ async fn download_calendar_cover(
     Ok(dest.to_string_lossy().into_owned())
 }
 
-/// 检测指定 exe 是否正在运行（按可执行文件名匹配）。
+/// 枚举当前系统中所有正在运行的进程可执行文件名（小写；同时记录完整名与前 15 字符前缀，
+/// 兼容部分系统信息接口对镜像名的截断）。
+fn running_process_names() -> std::collections::HashSet<String> {
+    let mut set = std::collections::HashSet::new();
+    unsafe {
+        let snapshot = windows_sys::Win32::System::Diagnostics::ToolHelp::CreateToolhelp32Snapshot(
+            windows_sys::Win32::System::Diagnostics::ToolHelp::TH32CS_SNAPPROCESS,
+            0,
+        );
+        if snapshot == windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE {
+            return set;
+        }
+        let mut entry: windows_sys::Win32::System::Diagnostics::ToolHelp::PROCESSENTRY32W =
+            std::mem::zeroed();
+        entry.dwSize = std::mem::size_of::<
+            windows_sys::Win32::System::Diagnostics::ToolHelp::PROCESSENTRY32W,
+        >() as u32;
+        if windows_sys::Win32::System::Diagnostics::ToolHelp::Process32FirstW(snapshot, &mut entry) != 0
+        {
+            loop {
+                let raw: &[u16] = &entry.szExeFile;
+                let end = raw.iter().position(|&ch| ch == 0).unwrap_or(raw.len());
+                let name = String::from_utf16_lossy(&raw[..end]).to_lowercase();
+                if !name.is_empty() {
+                    set.insert(name.clone());
+                    let prefix: String = name.chars().take(15).collect();
+                    set.insert(prefix);
+                }
+                if windows_sys::Win32::System::Diagnostics::ToolHelp::Process32NextW(snapshot, &mut entry)
+                    == 0
+                {
+                    break;
+                }
+            }
+        }
+        windows_sys::Win32::Foundation::CloseHandle(snapshot);
+    }
+    set
+}
+
+/// 检测指定 exe 是否正在运行（按可执行文件名匹配，原生枚举，毫秒级）。
+#[cfg(test)]
 fn is_process_running(path: &str) -> bool {
     let name = std::path::Path::new(path)
         .file_name()
@@ -1145,26 +1186,29 @@ fn is_process_running(path: &str) -> bool {
     if name.is_empty() {
         return false;
     }
-    let filter = format!("IMAGENAME eq {name}");
-    let out = std::process::Command::new("tasklist")
-        .args(["/FI", &filter, "/NH"])
-        .output();
-    match out {
-        Ok(o) => {
-            let text = String::from_utf8_lossy(&o.stdout);
-            let needle = name.to_lowercase();
-            // tasklist 显示/输出会把镜像名截断到 15 个字符，因此按前 15 个字符前缀匹配
-            let prefix: String = needle.chars().take(15).collect();
-            text.lines()
-                .any(|l| l.trim_start().to_lowercase().starts_with(&prefix))
-        }
-        Err(_) => false,
-    }
+    let needle = name.to_lowercase();
+    let running = running_process_names();
+    running.contains(&needle) || running.contains(&needle.chars().take(15).collect::<String>())
 }
 
 #[tauri::command]
-fn games_running(paths: Vec<String>) -> Vec<bool> {
-    paths.iter().map(|p| is_process_running(p)).collect()
+async fn games_running(paths: Vec<String>) -> Vec<bool> {
+    // 原生枚举一次即可，避免每轮为每个游戏 spawn 子进程而阻塞 GUI 主线程
+    let running = running_process_names();
+    paths
+        .iter()
+        .map(|p| {
+            let name = std::path::Path::new(p)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("");
+            if name.is_empty() {
+                return false;
+            }
+            let needle = name.to_lowercase();
+            running.contains(&needle) || running.contains(&needle.chars().take(15).collect::<String>())
+        })
+        .collect()
 }
 
 /// 关闭行为是否为“最小化到托盘”（读取设置表中的 close_behavior）。
