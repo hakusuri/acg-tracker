@@ -5,29 +5,10 @@ import EmptyState from '../components/EmptyState';
 import GlassModal from '../components/GlassModal';
 import WorkForm from '../components/WorkForm';
 import { launchGame, openExternal } from '../lib/api';
+import { useAutoTimerState } from '../lib/autoTimer';
 import { CATEGORY_COLORS, CATEGORY_LABELS, SEASON_LABELS, SOURCE_LABELS, STATUS_COLORS, STATUS_LABELS } from '../lib/constants';
-import { deleteWork, finishPlaySession, formatMinutes, getWork, listActivityByWork, listPlaySessions, onWorksChanged } from '../lib/db';
+import { deleteWork, formatMinutes, getWork, listActivityByWork, listPlaySessions, onWorksChanged } from '../lib/db';
 import type { ActivityEntry, LinkItem, PlaySession, Work } from '../types';
-
-const TIMER_KEY = 'acg_active_timer';
-
-interface ActiveTimer {
-  workId: number;
-  title: string;
-  startedAt: string;
-}
-
-function readTimer(): ActiveTimer | null {
-  try {
-    const raw = localStorage.getItem(TIMER_KEY);
-    if (!raw) return null;
-    const t = JSON.parse(raw) as ActiveTimer;
-    if (typeof t.workId !== 'number' || typeof t.title !== 'string' || typeof t.startedAt !== 'string') return null;
-    return t;
-  } catch {
-    return null;
-  }
-}
 
 function parseLinks(raw: string): LinkItem[] {
   if (!raw) return [];
@@ -86,9 +67,11 @@ export default function DetailPage() {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [sessions, setSessions] = useState<PlaySession[]>([]);
   const [activity, setActivity] = useState<ActivityEntry[]>([]);
-  const [timer, setTimer] = useState<ActiveTimer | null>(readTimer);
-  const [nowTs, setNowTs] = useState(Date.now());
   const [launchMsg, setLaunchMsg] = useState('');
+  const autoState = useAutoTimerState();
+  const [nowTs, setNowTs] = useState(Date.now());
+
+  const autoStart = work ? (autoState.timers[work.id] ?? null) : null;
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -109,42 +92,17 @@ export default function DetailPage() {
     return onWorksChanged(() => void refresh());
   }, [refresh]);
 
+  // 自动计时进行中时每秒刷新一次已计时长
   useEffect(() => {
-    if (!timer) return;
+    if (!autoStart) return;
+    setNowTs(Date.now());
     const iv = window.setInterval(() => setNowTs(Date.now()), 1000);
     return () => window.clearInterval(iv);
-  }, [timer]);
+  }, [autoStart]);
 
   const remove = async () => {
     await deleteWork(workId);
     navigate('/');
-  };
-
-  const startTimer = () => {
-    if (!work) return;
-    if (timer) {
-      if (timer.workId === work.id) return;
-      if (!window.confirm(`正在为《${timer.title}》计时，开始新计时前将结束原计时。是否继续？`)) return;
-      void stopTimer();
-    }
-    const t: ActiveTimer = { workId: work.id, title: work.title, startedAt: new Date().toISOString() };
-    localStorage.setItem(TIMER_KEY, JSON.stringify(t));
-    setTimer(t);
-    setNowTs(Date.now());
-  };
-
-  const stopTimer = async () => {
-    if (!timer) return;
-    const started = new Date(timer.startedAt).getTime();
-    const secs = Math.max(0, Math.floor((nowTs - started) / 1000));
-    localStorage.removeItem(TIMER_KEY);
-    setTimer(null);
-    if (secs < 1) return;
-    try {
-      await finishPlaySession(timer.workId, timer.startedAt, new Date().toISOString(), secs);
-    } catch (e) {
-      console.error('计时保存失败', e);
-    }
   };
 
   const launch = async () => {
@@ -169,7 +127,7 @@ export default function DetailPage() {
     );
   }
 
-  const tags = work.tags
+  const tags = (work.tags ?? '')
     .split(/[,，、]/)
     .map((t) => t.trim())
     .filter(Boolean);
@@ -177,7 +135,6 @@ export default function DetailPage() {
   const idLinks = sourceIdLinks(work);
   const categoryColor = CATEGORY_COLORS[work.category];
   const playtime = work.playtime_minutes ?? 0;
-  const elapsed = timer && timer.workId === work.id ? nowTs - new Date(timer.startedAt).getTime() : 0;
 
   return (
     <div className="page">
@@ -308,26 +265,25 @@ export default function DetailPage() {
                   <span className="game-path-text" title={work.game_path}>{work.game_path}</span>
                 </div>
               ) : (
-                <p className="detail-text">尚未设置游戏路径，可在「编辑」中为 Galgame 指定可执行文件。</p>
+                <p className="detail-text">尚未设置游戏路径，可在「编辑」中为 Galgame 指定可执行文件以启用自动计时。</p>
               )}
               <div className="timer-box">
-                {timer && timer.workId === work.id ? (
+                {autoStart ? (
                   <>
-                    <div className="timer-display">{fmtElapsed(elapsed)}</div>
-                    <button className="btn danger" onClick={() => void stopTimer()}>结束计时</button>
+                    <span className="timer-dot running" />
+                    <div>
+                      <div className="timer-display">{fmtElapsed(nowTs - new Date(autoStart).getTime())}</div>
+                      <div className="timer-hint">检测到游戏运行中，正在自动计时；关闭游戏后自动结算</div>
+                    </div>
                   </>
-                ) : timer ? (
-                  <p className="detail-text">
-                    正在为《{timer.title}》计时（点击开始会先结束原计时）
-                  </p>
                 ) : (
-                  <p className="detail-text">计时器会累加到累计时长，并记录一次游玩动态。</p>
-                )}
-                {(!timer || timer.workId !== work.id) && (
-                  <button className="btn primary" onClick={startTimer}>开始计时</button>
-                )}
-                {timer && timer.workId !== work.id && (
-                  <button className="btn ghost" onClick={() => void stopTimer()}>结束《{timer.title}》计时</button>
+                  <>
+                    <span className="timer-dot idle" />
+                    <div>
+                      <div className="timer-hint">未检测到游戏运行</div>
+                      <div className="timer-hint dim">启动游戏后将自动开始计时，关闭后自动结算并写入累计时长</div>
+                    </div>
+                  </>
                 )}
               </div>
               {sessions.length > 0 && (

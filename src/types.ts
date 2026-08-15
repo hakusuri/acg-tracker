@@ -18,6 +18,7 @@ export interface WorkFormPrefill {
   source?: string;
   start_date?: string | null;
   end_date?: string | null;
+  playtime_minutes?: number;
   game_path?: string;
   bangumi_id?: number | null;
   vndb_id?: string;

@@ -419,7 +419,8 @@ export async function finishPlaySession(workId: number, startedAt: string, ended
     'UPDATE works SET playtime_minutes = COALESCE(playtime_minutes, 0) + $2, updated_at = $3 WHERE id = $1',
     [workId, mins, new Date().toISOString()],
   );
-  await addActivity(workId, 'play', `游玩 ${formatMinutes(mins)}`);
+  const w = await getWork(workId);
+  await addActivity(workId, 'play', w ? `《${w.title}》游玩 ${formatMinutes(mins)}` : `游玩 ${formatMinutes(mins)}`);
   emitWorksChanged();
 }
 

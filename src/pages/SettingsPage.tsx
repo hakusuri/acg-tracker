@@ -9,7 +9,7 @@ import { CATEGORIES, CATEGORY_LABELS, STATUSES, STATUS_LABELS } from '../lib/con
 import { clearWorks, closeDatabase, getSetting, insertWork, listWorks, reloadDatabase, setSetting, updateWork, workToInput } from '../lib/db';
 import { normalizeTitle } from '../lib/importers';
 import { useSettings } from '../lib/settings';
-import type { AppSettings, Density, ProxyMode, SortKey, ThemeMode, ViewMode } from '../lib/settings';
+import type { AppSettings, CloseBehavior, Density, ProxyMode, SortKey, ThemeMode, ViewMode } from '../lib/settings';
 import type { BackupInfo, UpdateCheck, Work } from '../types';
 import pkg from '../../package.json';
 
@@ -25,6 +25,7 @@ const SORT_LABELS: Record<SortKey, string> = {
 const THEME_LABELS: Record<ThemeMode, string> = { auto: '跟随系统', light: '浅色', dark: '深色' };
 const DENSITY_LABELS: Record<Density, string> = { comfortable: '舒适', compact: '紧凑' };
 const VIEW_LABELS: Record<ViewMode, string> = { grid: '网格', list: '列表' };
+const CLOSE_BEHAVIOR_LABELS: Record<CloseBehavior, string> = { exit: '直接退出', tray: '最小化到托盘' };
 const PROXY_LABELS: Record<ProxyMode, string> = { auto: '跟随系统', direct: '直连', custom: '自定义' };
 
 function SettingRow({ label, desc, children }: { label: string; desc?: string; children?: ReactNode }) {
@@ -493,6 +494,13 @@ export default function SettingsPage() {
             <select className="select select-sm" value={settings.viewMode} onChange={(e) => patch('viewMode', e.target.value as ViewMode)}>
               {(Object.keys(VIEW_LABELS) as ViewMode[]).map((k) => (
                 <option key={k} value={k}>{VIEW_LABELS[k]}</option>
+              ))}
+            </select>
+          </SettingRow>
+          <SettingRow label="关闭按钮行为" desc="点击窗口关闭按钮时直接退出，或最小化到系统托盘（托盘图标可恢复/退出）">
+            <select className="select select-sm" value={settings.closeBehavior} onChange={(e) => patch('closeBehavior', e.target.value as CloseBehavior)}>
+              {(Object.keys(CLOSE_BEHAVIOR_LABELS) as CloseBehavior[]).map((k) => (
+                <option key={k} value={k}>{CLOSE_BEHAVIOR_LABELS[k]}</option>
               ))}
             </select>
           </SettingRow>

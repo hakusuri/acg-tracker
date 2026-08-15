@@ -38,6 +38,7 @@ function emptyForm(defaults: { category: Category; status: Status }): WorkInput 
     source: 'manual',
     start_date: null,
     end_date: null,
+    playtime_minutes: 0,
     game_path: '',
     bangumi_id: null,
     vndb_id: '',
@@ -103,6 +104,7 @@ export default function WorkForm({ open, work, prefill, onClose, onSaved }: Prop
         source: work.source,
         start_date: work.start_date ?? null,
         end_date: work.end_date ?? null,
+        playtime_minutes: work.playtime_minutes ?? 0,
         game_path: work.game_path ?? '',
         bangumi_id: work.bangumi_id ?? null,
         vndb_id: work.vndb_id ?? '',
@@ -126,6 +128,7 @@ export default function WorkForm({ open, work, prefill, onClose, onSaved }: Prop
         base.source = prefill.source ?? 'manual';
         base.start_date = prefill.start_date ?? null;
         base.end_date = prefill.end_date ?? null;
+        base.playtime_minutes = prefill.playtime_minutes ?? 0;
         base.game_path = prefill.game_path ?? '';
         base.bangumi_id = prefill.bangumi_id ?? null;
         base.vndb_id = prefill.vndb_id ?? '';
@@ -150,6 +153,11 @@ export default function WorkForm({ open, work, prefill, onClose, onSaved }: Prop
 
   const setDate = (key: 'start_date' | 'end_date') => (e: ChangeEvent<HTMLInputElement>) => {
     set(key, e.target.value || null);
+  };
+
+  const setPlaytime = (e: ChangeEvent<HTMLInputElement>) => {
+    const v = e.target.value;
+    set('playtime_minutes', v === '' ? 0 : Math.max(0, parseInt(v, 10)));
   };
 
   const setRating = (key: 'rating' | 'my_rating') => (e: ChangeEvent<HTMLInputElement>) => {
@@ -356,6 +364,20 @@ export default function WorkForm({ open, work, prefill, onClose, onSaved }: Prop
               />
               <button className="btn ghost" type="button" onClick={() => void pickGamePath()}>选择文件</button>
             </div>
+          </div>
+        )}
+
+        {isGalgame && (
+          <div className="field">
+            <label>游玩时长（分钟）</label>
+            <input
+              className="input"
+              type="number"
+              min={0}
+              value={form.playtime_minutes ?? 0}
+              onChange={setPlaytime}
+              placeholder="0"
+            />
           </div>
         )}
 

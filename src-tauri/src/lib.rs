@@ -1136,6 +1136,69 @@ async fn download_calendar_cover(
     Ok(dest.to_string_lossy().into_owned())
 }
 
+/// 检测指定 exe 是否正在运行（按可执行文件名匹配）。
+fn is_process_running(path: &str) -> bool {
+    let name = std::path::Path::new(path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("");
+    if name.is_empty() {
+        return false;
+    }
+    let filter = format!("IMAGENAME eq {name}");
+    let out = std::process::Command::new("tasklist")
+        .args(["/FI", &filter, "/NH"])
+        .output();
+    match out {
+        Ok(o) => {
+            let text = String::from_utf8_lossy(&o.stdout);
+            let needle = name.to_lowercase();
+            // tasklist 显示/输出会把镜像名截断到 15 个字符，因此按前 15 个字符前缀匹配
+            let prefix: String = needle.chars().take(15).collect();
+            text.lines()
+                .any(|l| l.trim_start().to_lowercase().starts_with(&prefix))
+        }
+        Err(_) => false,
+    }
+}
+
+#[tauri::command]
+fn games_running(paths: Vec<String>) -> Vec<bool> {
+    paths.iter().map(|p| is_process_running(p)).collect()
+}
+
+/// 关闭行为是否为“最小化到托盘”（读取设置表中的 close_behavior）。
+fn close_behavior_is_tray(app: &tauri::AppHandle) -> bool {
+    // 使用与前端一致的实际数据目录（默认程序目录/data，或引导文件指定的自定义目录）
+    let cfg = app.path().app_config_dir().unwrap_or_default();
+    let custom = bootstrap_data_dir_from(&cfg);
+    let db_path = resolve_data_dir(app, &custom).join("acg.db");
+    if !db_path.exists() {
+        return false;
+    }
+    let value = tauri::async_runtime::block_on(async {
+        let opts = sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(&db_path)
+            .create_if_missing(false)
+            .read_only(true);
+        let Ok(pool) = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+        else {
+            return None;
+        };
+        let result = sqlx::query_scalar::<_, String>(
+            "SELECT value FROM settings WHERE key = 'close_behavior'",
+        )
+        .fetch_optional(&pool)
+        .await;
+        let _ = pool.close().await;
+        result.unwrap_or(None)
+    });
+    value.as_deref() == Some("tray")
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1143,7 +1206,56 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_opener::init())
+        .setup(|app| {
+
+            if let Some(icon) = app.default_window_icon().cloned() {
+                let show_item = tauri::menu::MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
+                let quit_item = tauri::menu::MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
+                let menu = tauri::menu::Menu::with_items(app, &[&show_item, &quit_item])?;
+                let tray = tauri::tray::TrayIconBuilder::with_id("main-tray")
+                    .icon(icon)
+                    .menu(&menu)
+                    .show_menu_on_left_click(false)
+                    .on_menu_event(|app, event| match event.id.as_ref() {
+                        "show" => {
+                            if let Some(w) = app.get_webview_window("main") {
+                                let _ = w.show();
+                                let _ = w.unminimize();
+                                let _ = w.set_focus();
+                            }
+                        }
+                        "quit" => app.exit(0),
+                        _ => {}
+                    })
+                    .on_tray_icon_event(|tray, event| {
+                        if let tauri::tray::TrayIconEvent::Click {
+                            button: tauri::tray::MouseButton::Left,
+                            ..
+                        } = event
+                        {
+                            let app = tray.app_handle();
+                            if let Some(w) = app.get_webview_window("main") {
+                                let _ = w.show();
+                                let _ = w.unminimize();
+                                let _ = w.set_focus();
+                            }
+                        }
+                    });
+                tray.build(app)?;
+            }
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "main" && close_behavior_is_tray(window.app_handle()) {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
+            games_running,
             fetch_bangumi_calendar,
             fetch_bangumi_subject,
             launch_game,
@@ -1181,6 +1293,14 @@ pub fn run() {
 mod api_tests {
     use super::*;
 
+
+    #[test]
+    fn check_process_running() {
+        let exe = std::env::current_exe().unwrap();
+        let path = exe.to_string_lossy().to_string();
+        assert!(is_process_running(&path), "当前测试进程应被检测为运行中");
+        assert!(!is_process_running(r"C:\nonexistent\not_running_xyz_12345.exe"));
+    }
 
     #[tokio::test]
     async fn check_calendar() {

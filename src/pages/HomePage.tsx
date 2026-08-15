@@ -83,7 +83,7 @@ export default function HomePage() {
   const tags = useMemo(() => {
     const set = new Set<string>();
     for (const w of works) {
-      for (const t of w.tags.split(/[,，、]/)) {
+      for (const t of (w.tags ?? '').split(/[,，、]/)) {
         const s = t.trim();
         if (s) set.add(s);
       }
@@ -97,7 +97,7 @@ export default function HomePage() {
       if (category !== 'all' && w.category !== category) return false;
       if (year !== 'all' && w.year !== year) return false;
       if (season !== 'all' && (w.category !== 'anime' || w.season !== season)) return false;
-      if (tagFilter !== 'all' && !w.tags.split(/[,，、]/).map((t) => t.trim()).includes(tagFilter)) return false;
+      if (tagFilter !== 'all' && !(w.tags ?? '').split(/[,，、]/).map((t) => t.trim()).includes(tagFilter)) return false;
       if (kw && !w.title.toLowerCase().includes(kw)) return false;
       return true;
     });

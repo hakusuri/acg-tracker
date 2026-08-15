@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { HashRouter, Navigate, NavLink, Route, Routes, useNavigate } from 'react-router-dom';
 import WorkForm from './components/WorkForm';
 import { backupDatabase, toAssetUrl } from './lib/api';
+import { autoTimerTick } from './lib/autoTimer';
 import { setSetting } from './lib/db';
 import { onRequestAddWork } from './lib/events';
 import { SettingsProvider, useSettings } from './lib/settings';
@@ -75,6 +76,14 @@ function AppInner() {
       setAppReady(true);
     })();
   }, [loaded, settings.autoBackup, settings.backupCount]);
+
+  // Galgame 自动计时：每 5 秒检测一次配置了路径的游戏是否在运行
+  useEffect(() => {
+    if (!appReady) return;
+    void autoTimerTick();
+    const iv = window.setInterval(() => void autoTimerTick(), 5000);
+    return () => window.clearInterval(iv);
+  }, [appReady]);
 
   if (!appReady) {
     return <div className="loading">正在加载设置…</div>;
